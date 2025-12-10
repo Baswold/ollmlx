@@ -71,7 +71,7 @@ func InitScheduler(ctx context.Context) *Scheduler {
 		expiredCh:       make(chan *runnerRef, maxQueue),
 		unloadedCh:      make(chan any, maxQueue),
 		loaded:          make(map[string]*runnerRef),
-		newServerFn:     llm.NewLlamaServer,
+		newServerFn:     llm.NewServer,
 		getGpuFn:        discover.GPUDevices,
 		getSystemInfoFn: discover.GetSystemInfo,
 		waitForRecovery: 5 * time.Second,
@@ -196,10 +196,19 @@ func (s *Scheduler) processPending(ctx context.Context) {
 
 					// Load model for fitting
 					logutil.Trace("loading model metadata", "model", pending.model.ModelPath)
-					ggml, err := llm.LoadModel(pending.model.ModelPath, 1024)
-					if err != nil {
-						pending.errCh <- err
-						break
+
+					var ggml *ggml.GGML
+					// Check if this is an MLX model - if so, skip GGML loading
+					if llm.IsMLXModel(pending.model.ModelPath) {
+						slog.Info("detected MLX model, skipping GGML metadata loading", "model", pending.model.ModelPath)
+						ggml = nil
+					} else {
+						var err error
+						ggml, err = llm.LoadModel(pending.model.ModelPath, 1024)
+						if err != nil {
+							pending.errCh <- err
+							break
+						}
 					}
 
 					// Update free memory from currently loaded models

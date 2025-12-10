@@ -1,0 +1,58 @@
+# Example Modelfile for MLX models
+# Works exactly like standard Ollama Modelfiles
+
+# Pull from HuggingFace MLX community
+FROM mlx-community/Llama-3.2-3B-Instruct-4bit
+
+# Or use a local MLX model directory
+# FROM /path/to/local/mlx-model
+
+# Or use any HuggingFace model (will be auto-converted if needed)
+# FROM author/model-name
+
+# Set the temperature (0.0 - 2.0)
+PARAMETER temperature 0.8
+
+# Set the maximum tokens to generate
+PARAMETER num_predict 256
+
+# Set top-k sampling
+PARAMETER top_k 40
+
+# Set top-p (nucleus) sampling
+PARAMETER top_p 0.9
+
+# Set repetition penalty
+PARAMETER repeat_penalty 1.1
+
+# Set the system prompt
+SYSTEM """
+You are a helpful AI assistant running on Apple Silicon using MLX for optimal performance.
+Be concise, accurate, and friendly in your responses.
+"""
+
+# Set the chat template (optional - model's default will be used if not specified)
+TEMPLATE """
+{{ if .System }}<|system|>
+{{ .System }}<|end|>
+{{ end }}{{ if .Prompt }}<|user|>
+{{ .Prompt }}<|end|>
+<|assistant|>
+{{ end }}{{ .Response }}<|end|>
+"""
+
+# Add a license (optional)
+LICENSE """
+This model is released under the Apache 2.0 license.
+"""
+
+# Usage:
+# 1. Save this as "Modelfile"
+# 2. Run: ollama create my-custom-model -f Modelfile
+# 3. Run: ollama run my-custom-model
+
+# MLX-specific notes:
+# - FROM can be any HuggingFace MLX model
+# - All standard Ollama parameters work
+# - MLX models automatically use Metal acceleration
+# - Model is cached at ~/.ollama/models/mlx/

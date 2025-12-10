@@ -138,6 +138,69 @@ func LoadModel(model string, maxArraySize int) (*ggml.GGML, error) {
 	return ggml, err
 }
 
+// NewServer creates the appropriate server based on model format detection
+func NewServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath string, f *ggml.GGML, adapters, projectors []string, opts api.Options, numParallel int) (LlamaServer, error) {
+	// Detect model format
+	if IsMLXModel(modelPath) {
+		slog.Info("detected MLX model format", "model", modelPath)
+		return NewMLXServer(systemInfo, gpus, modelPath, adapters, projectors, opts, numParallel)
+	}
+
+	// Default to GGUF/llama.cpp
+	slog.Info("using GGUF/llama.cpp backend", "model", modelPath)
+	return NewLlamaServer(systemInfo, gpus, modelPath, f, adapters, projectors, opts, numParallel)
+}
+
+// NewMLXServer creates a server that uses the MLX backend
+func NewMLXServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath string, adapters, projectors []string, opts api.Options, numParallel int) (LlamaServer, error) {
+	slog.Info("starting MLX backend server", "model", modelPath)
+
+	// For MLX, we don't need GPU libraries or complex initialization
+	// The Python backend handles all of that
+	status := NewStatusWriter(os.Stderr)
+	cmd, port, err := StartRunnerWithEngine(
+		false, // not ollama engine
+		true,  // use MLX engine
+		modelPath,
+		[]string{}, // no GPU libraries needed for MLX
+		status,
+		nil, // no extra envs needed
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to start MLX runner: %w", err)
+	}
+
+	s := llmServer{
+		port:           port,
+		cmd:            cmd,
+		status:         status,
+		options:        opts,
+		modelPath:      modelPath,
+		loadRequest:    LoadRequest{}, // MLX doesn't use the same load parameters
+		llamaModel:     nil,
+		llamaModelLock: &sync.Mutex{},
+		sem:            semaphore.NewWeighted(int64(numParallel)),
+		totalLayers:    0, // MLX doesn't expose layer count the same way
+		loadStart:      time.Now(),
+		done:           make(chan error, 1),
+	}
+
+	// reap subprocess when it exits
+	go func() {
+		err := s.cmd.Wait()
+		if err != nil && s.status != nil && s.status.LastErrMsg != "" {
+			slog.Error("MLX runner terminated", "error", err)
+			s.done <- errors.New(s.status.LastErrMsg)
+		} else {
+			s.done <- err
+		}
+	}()
+
+	// Return as a generic llmServer wrapped as llamaServer for compatibility
+	return &llamaServer{llmServer: s, ggml: nil}, nil
+}
+
 // NewLlamaServer will run a server for the given GPUs
 func NewLlamaServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath string, f *ggml.GGML, adapters, projectors []string, opts api.Options, numParallel int) (LlamaServer, error) {
 	var llamaModel *llama.Model
@@ -280,6 +343,10 @@ func NewLlamaServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath st
 }
 
 func StartRunner(ollamaEngine bool, modelPath string, gpuLibs []string, out io.Writer, extraEnvs map[string]string) (cmd *exec.Cmd, port int, err error) {
+	return StartRunnerWithEngine(ollamaEngine, false, modelPath, gpuLibs, out, extraEnvs)
+}
+
+func StartRunnerWithEngine(ollamaEngine bool, mlxEngine bool, modelPath string, gpuLibs []string, out io.Writer, extraEnvs map[string]string) (cmd *exec.Cmd, port int, err error) {
 	var exe string
 	exe, err = os.Executable()
 	if err != nil {
@@ -303,7 +370,9 @@ func StartRunner(ollamaEngine bool, modelPath string, gpuLibs []string, out io.W
 		port = rand.Intn(65535-49152) + 49152 // get a random port in the ephemeral range
 	}
 	params := []string{"runner"}
-	if ollamaEngine {
+	if mlxEngine {
+		params = append(params, "--mlx-engine")
+	} else if ollamaEngine {
 		params = append(params, "--ollama-engine")
 	}
 	if modelPath != "" {
