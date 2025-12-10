@@ -765,20 +765,7 @@ func makeRequestWithRetry(ctx context.Context, method string, requestURL *url.UR
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized:
 			resp.Body.Close()
-
-			// Handle authentication error with one retry
-			challenge := parseRegistryChallenge(resp.Header.Get("www-authenticate"))
-			token, err := getAuthorizationToken(ctx, challenge)
-			if err != nil {
-				return nil, err
-			}
-			regOpts.Token = token
-			if body != nil {
-				_, err = body.Seek(0, io.SeekStart)
-				if err != nil {
-					return nil, err
-				}
-			}
+			return nil, errUnauthorized
 		case resp.StatusCode == http.StatusNotFound:
 			resp.Body.Close()
 			return nil, os.ErrNotExist
@@ -877,16 +864,6 @@ func getValue(header, key string) string {
 		endIdx++
 	}
 	return header[startIdx:endIdx]
-}
-
-func parseRegistryChallenge(authStr string) registryChallenge {
-	authStr = strings.TrimPrefix(authStr, "Bearer ")
-
-	return registryChallenge{
-		Realm:   getValue(authStr, "realm"),
-		Service: getValue(authStr, "service"),
-		Scope:   getValue(authStr, "scope"),
-	}
 }
 
 var errDigestMismatch = errors.New("digest mismatch, file must be downloaded again")

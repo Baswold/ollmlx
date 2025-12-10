@@ -549,54 +549,13 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 }
 
 func SigninHandler(cmd *cobra.Command, args []string) error {
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
-		return err
-	}
-
-	user, err := client.Whoami(cmd.Context())
-	if err != nil {
-		var aErr api.AuthorizationError
-		if errors.As(err, &aErr) && aErr.StatusCode == http.StatusUnauthorized {
-			fmt.Println("You need to be signed in to Ollama to run Cloud models.")
-			fmt.Println()
-
-			if aErr.SigninURL != "" {
-				fmt.Printf(ConnectInstructions, aErr.SigninURL)
-			}
-			return nil
-		}
-		return err
-	}
-
-	if user != nil && user.Name != "" {
-		fmt.Printf("You are already signed in as user '%s'\n", user.Name)
-		fmt.Println()
-		return nil
-	}
-
+	fmt.Println("Authentication has been disabled in this build. All commands are available without signing in.")
+	fmt.Println()
 	return nil
 }
 
 func SignoutHandler(cmd *cobra.Command, args []string) error {
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
-		return err
-	}
-
-	err = client.Signout(cmd.Context())
-	if err != nil {
-		var aErr api.AuthorizationError
-		if errors.As(err, &aErr) && aErr.StatusCode == http.StatusUnauthorized {
-			fmt.Println("You are not signed in to ollama.com")
-			fmt.Println()
-			return nil
-		} else {
-			return err
-		}
-	}
-
-	fmt.Println("You have signed out of ollama.com")
+	fmt.Println("Authentication has been disabled in this build. There is no active session to sign out of.")
 	fmt.Println()
 	return nil
 }
@@ -613,23 +572,6 @@ func PushHandler(cmd *cobra.Command, args []string) error {
 	}
 
 	n := model.ParseName(args[0])
-	if strings.HasSuffix(n.Host, ".ollama.ai") || strings.HasSuffix(n.Host, ".ollama.com") {
-		_, err := client.Whoami(cmd.Context())
-		if err != nil {
-			var aErr api.AuthorizationError
-			if errors.As(err, &aErr) && aErr.StatusCode == http.StatusUnauthorized {
-				fmt.Println("You need to be signed in to push models to ollama.com.")
-				fmt.Println()
-
-				if aErr.SigninURL != "" {
-					fmt.Printf(ConnectInstructions, aErr.SigninURL)
-				}
-				return nil
-			}
-
-			return err
-		}
-	}
 
 	p := progress.NewProgress(os.Stderr)
 	defer p.Stop()

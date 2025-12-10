@@ -141,7 +141,7 @@ func Remotes() []string {
 	var r []string
 	raw := strings.TrimSpace(Var("OLLAMA_REMOTES"))
 	if raw == "" {
-		r = []string{"ollama.com"}
+		r = []string{}
 	} else {
 		r = strings.Split(raw, ",")
 	}

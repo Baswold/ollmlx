@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +31,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/auth"
 	"github.com/ollama/ollama/discover"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
@@ -51,8 +49,6 @@ import (
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
 )
-
-const signinURLStr = "https://ollama.com/connect?name=%s&key=%s"
 
 func shouldUseHarmony(model *Model) bool {
 	if slices.Contains([]string{"gptoss", "gpt-oss"}, model.Config.ModelFamily) {
@@ -160,17 +156,6 @@ func (s *Server) scheduleRunner(ctx context.Context, name string, caps []model.C
 	}
 
 	return runner.llama, model, &opts, nil
-}
-
-func signinURL() (string, error) {
-	pubKey, err := auth.GetPublicKey()
-	if err != nil {
-		return "", err
-	}
-
-	encKey := base64.RawURLEncoding.EncodeToString([]byte(pubKey))
-	h, _ := os.Hostname()
-	return fmt.Sprintf(signinURLStr, url.PathEscape(h), encKey), nil
 }
 
 func (s *Server) GenerateHandler(c *gin.Context) {
@@ -291,14 +276,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		if err != nil {
 			var authError api.AuthorizationError
 			if errors.As(err, &authError) {
-				sURL, sErr := signinURL()
-				if sErr != nil {
-					slog.Error(sErr.Error())
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "error getting authorization details"})
-					return
-				}
-
-				c.JSON(authError.StatusCode, gin.H{"error": "unauthorized", "signin_url": sURL})
+				c.JSON(authError.StatusCode, gin.H{"error": "unauthorized"})
 				return
 			}
 			var apiError api.StatusError
@@ -1734,66 +1712,10 @@ func streamResponse(c *gin.Context, ch chan any) {
 }
 
 func (s *Server) WhoamiHandler(c *gin.Context) {
-	// todo allow other hosts
-	u, err := url.Parse("https://ollama.com")
-	if err != nil {
-		slog.Error(err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "URL parse error"})
-		return
-	}
-
-	client := api.NewClient(u, http.DefaultClient)
-	user, err := client.Whoami(c)
-	if err != nil {
-		slog.Error(err.Error())
-	}
-
-	// user isn't signed in
-	if user != nil && user.Name == "" {
-		sURL, sErr := signinURL()
-		if sErr != nil {
-			slog.Error(sErr.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error getting authorization details"})
-			return
-		}
-
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "signin_url": sURL})
-		return
-	}
-
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, &api.UserResponse{})
 }
 
 func (s *Server) SignoutHandler(c *gin.Context) {
-	pubKey, err := auth.GetPublicKey()
-	if err != nil {
-		slog.Error("couldn't get public key", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "there was an error signing out"})
-		return
-	}
-
-	encKey := base64.RawURLEncoding.EncodeToString([]byte(pubKey))
-
-	// todo allow other hosts
-	u, err := url.Parse("https://ollama.com")
-	if err != nil {
-		slog.Error(err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "URL parse error"})
-		return
-	}
-
-	client := api.NewClient(u, http.DefaultClient)
-	err = client.Disconnect(c, encKey)
-	if err != nil {
-		var authError api.AuthorizationError
-		if errors.As(err, &authError) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "you are not currently signed in"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "there was an error signing out"})
-		return
-	}
-
 	c.JSON(http.StatusOK, nil)
 }
 
@@ -1976,14 +1898,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		if err != nil {
 			var authError api.AuthorizationError
 			if errors.As(err, &authError) {
-				sURL, sErr := signinURL()
-				if sErr != nil {
-					slog.Error(sErr.Error())
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "error getting authorization details"})
-					return
-				}
-
-				c.JSON(authError.StatusCode, gin.H{"error": "unauthorized", "signin_url": sURL})
+				c.JSON(authError.StatusCode, gin.H{"error": "unauthorized"})
 				return
 			}
 			var apiError api.StatusError
