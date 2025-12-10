@@ -835,7 +835,36 @@ func (s *Server) PullHandler(c *gin.Context) {
 		return
 	}
 
-	name := model.ParseName(cmp.Or(req.Model, req.Name))
+	modelName := cmp.Or(req.Model, req.Name)
+
+	// Check if this is an MLX model reference
+	if IsMLXModelReference(modelName) {
+		ch := make(chan any)
+		go func() {
+			defer close(ch)
+			fn := func(r api.ProgressResponse) {
+				ch <- r
+			}
+
+			ctx, cancel := context.WithCancel(c.Request.Context())
+			defer cancel()
+
+			if err := PullMLXModel(ctx, modelName, fn); err != nil {
+				ch <- gin.H{"error": err.Error()}
+			}
+		}()
+
+		if req.Stream != nil && !*req.Stream {
+			waitForStream(c, ch)
+			return
+		}
+
+		streamResponse(c, ch)
+		return
+	}
+
+	// Default to GGUF model handling
+	name := model.ParseName(modelName)
 	if !name.IsValid() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": errtypes.InvalidModelNameErrMsg})
 		return
@@ -967,15 +996,32 @@ func (s *Server) DeleteHandler(c *gin.Context) {
 		return
 	}
 
-	n := model.ParseName(cmp.Or(r.Model, r.Name))
+	modelName := cmp.Or(r.Model, r.Name)
+
+	// Check if this is an MLX model
+	if IsMLXModelReference(modelName) {
+		if err := DeleteMLXModel(modelName); err != nil {
+			if os.IsNotExist(err) {
+				c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", modelName)})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
+			return
+		}
+		c.Status(http.StatusOK)
+		return
+	}
+
+	// Default to GGUF model handling
+	n := model.ParseName(modelName)
 	if !n.IsValid() {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("name %q is invalid", cmp.Or(r.Model, r.Name))})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("name %q is invalid", modelName)})
 		return
 	}
 
 	n, err := getExistingName(n)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", cmp.Or(r.Model, r.Name))})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", modelName)})
 		return
 	}
 
@@ -983,7 +1029,7 @@ func (s *Server) DeleteHandler(c *gin.Context) {
 	if err != nil {
 		switch {
 		case os.IsNotExist(err):
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", cmp.Or(r.Model, r.Name))})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", modelName)})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}
@@ -1039,6 +1085,12 @@ func (s *Server) ShowHandler(c *gin.Context) {
 }
 
 func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
+	// Check if this is an MLX model
+	if IsMLXModelReference(req.Model) {
+		return ShowMLXModel(req.Model)
+	}
+
+	// Default to GGUF model handling
 	name := model.ParseName(req.Model)
 	if !name.IsValid() {
 		return nil, ErrModelPathInvalid
@@ -1193,13 +1245,15 @@ func getModelData(digest string, verbose bool) (ggml.KV, ggml.Tensors, error) {
 }
 
 func (s *Server) ListHandler(c *gin.Context) {
+	models := []api.ListModelResponse{}
+
+	// Get GGUF models
 	ms, err := Manifests(true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	models := []api.ListModelResponse{}
 	for n, m := range ms {
 		var cf ConfigV2
 
@@ -1234,6 +1288,14 @@ func (s *Server) ListHandler(c *gin.Context) {
 				QuantizationLevel: cf.FileType,
 			},
 		})
+	}
+
+	// Get MLX models and add them to the list
+	mlxModels, err := ListMLXModels()
+	if err != nil {
+		slog.Warn("failed to list MLX models", "error", err)
+	} else {
+		models = append(models, mlxModels...)
 	}
 
 	slices.SortStableFunc(models, func(i, j api.ListModelResponse) int {
