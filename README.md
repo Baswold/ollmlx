@@ -2,7 +2,7 @@
 
 **Apple Silicon Optimized LLM Inference** | **100% Ollama Compatible** | **MLX-Powered (GGUF replaced)**
 
-> **⚡ Claude Merged Edition** - This version combines the excellent infrastructure from `small_model` with the fully functional MLX backend from `big_model`. See [MERGE_SUMMARY.md](MERGE_SUMMARY.md) for details.
+> **⚡ Claude Merged Edition** - This version combines the excellent infrastructure from `small_model` with the fully functional MLX backend from `big_model`. See [MERGE_SUMMARY.md](docs/archive/MERGE_SUMMARY.md) for details.
 
 ## 🎯 Project Status
 
@@ -17,7 +17,7 @@
 
 **Production Readiness:** 90% 🚀
 
-> **Note:** MLX generation infrastructure is complete but requires routing fix. GGUF models work perfectly. See [test_results_mlx_generation.md](test_results_mlx_generation.md) for details.
+> **Note:** MLX generation infrastructure is complete but requires routing fix. GGUF models work perfectly. See [test_results_mlx_generation.md](docs/archive/test_results_mlx_generation.md) for details.
 
 
 > **ollmlx** is a high-performance LLM inference server optimized for Apple Silicon, delivering blazing-fast inference with full Ollama API compatibility.
@@ -46,9 +46,9 @@ ollmlx is a **drop-in replacement** for Ollama that swaps the GGUF/llama.cpp bac
 
 ## 🚀 Quick Start
 
-> 📖 **New here?** Start with [QUICKSTART_SIMPLE.md](QUICKSTART_SIMPLE.md) for the easiest setup!
+> 📖 **New here?** Start with [QUICKSTART_SIMPLE.md](docs/guides/QUICKSTART_SIMPLE.md) for the easiest setup!
 
-> 🔍 **Need details?** See [QUICKSTART_DETAILED.md](QUICKSTART_DETAILED.md) for comprehensive instructions.
+> 🔍 **Need details?** See [QUICKSTART_DETAILED.md](docs/guides/QUICKSTART_DETAILED.md) for comprehensive instructions.
 
 ### 1. Install
 

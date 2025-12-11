@@ -185,7 +185,7 @@ curl http://localhost:11434/api/chat -d '{
 Once you're comfortable with the basics:
 
 1. **Read the full README** - Comprehensive guide with all features
-2. **Check MERGE_SUMMARY.md** - Understand what makes this version special
+2. **Check [MERGE_SUMMARY.md](../archive/MERGE_SUMMARY.md)** - Understand what makes this version special
 3. **Explore MLX_ARCHITECTURE.md** - Deep dive into how it works
 4. **Run tests** - `./test_ollmlx.sh` to verify everything works
 

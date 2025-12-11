@@ -1,3 +1,6 @@
+//go:build debug
+// +build debug
+
 package main
 
 import (
@@ -29,7 +32,7 @@ func IsMLXModelReference(modelName string) bool {
 func main() {
 	testModels := []string{
 		"mlx-community/gemma-3-270m-4bit",
-		"mlx-community_gemma-3-270m-4bit", 
+		"mlx-community_gemma-3-270m-4bit",
 		"gemma-3-270m-4bit",
 		"mlx-community/Llama-3-8B-Instruct-4bit",
 		"some-model-mlx",

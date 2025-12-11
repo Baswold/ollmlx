@@ -484,14 +484,23 @@ func IsMLXModelReference(modelName string) bool {
 func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 	ctx := c.Request.Context()
 	manager := llm.NewMLXModelManager()
-	localName := strings.ReplaceAll(req.Model, "/", "_")
+	modelName := req.Model
 
-	if !manager.ModelExists(localName) {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
-		return
+	if !manager.ModelExists(modelName) {
+		slog.Info("MLX model missing locally, downloading from Hugging Face", "model", modelName)
+
+		downloadCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		if err := manager.DownloadMLXModel(downloadCtx, modelName, func(status string, progress float64) {
+			slog.Info("downloading MLX model", "model", modelName, "status", status, "progress", progress)
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to download MLX model: %v", err)})
+			return
+		}
 	}
 
-	if _, err := manager.GetModelInfo(localName); err != nil {
+	if _, err := manager.GetModelInfo(modelName); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

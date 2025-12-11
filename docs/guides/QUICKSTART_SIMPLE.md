@@ -49,4 +49,4 @@ curl http://localhost:11434/api/chat -d '{
 
 **Need help?** Check [TESTING_GUIDE.md](TESTING_GUIDE.md)
 
-**Found an issue?** See [test_results_mlx_generation.md](test_results_mlx_generation.md) for known limitations.
+**Found an issue?** See [test_results_mlx_generation.md](../archive/test_results_mlx_generation.md) for known limitations.

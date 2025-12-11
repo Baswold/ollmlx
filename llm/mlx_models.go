@@ -84,7 +84,7 @@ func (m *MLXModelManager) ListModels() ([]MLXModelInfo, error) {
 
 // GetModelInfo retrieves metadata for a specific MLX model
 func (m *MLXModelManager) GetModelInfo(modelName string) (MLXModelInfo, error) {
-	modelPath := filepath.Join(m.modelsDir, modelName)
+	modelPath := m.GetModelPath(modelName)
 
 	info := MLXModelInfo{
 		Name:   modelName,
