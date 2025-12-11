@@ -1,9 +1,12 @@
 package llm
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -119,8 +122,9 @@ func (m *MLXModelManager) GetModelInfo(modelName string) (MLXModelInfo, error) {
 		info.Size = size
 	}
 
-	// Generate a digest from the model name (simplified)
-	info.Digest = fmt.Sprintf("sha256:%x", modelName)
+	// Generate a stable digest from the model name
+	sum := sha256.Sum256([]byte(modelName))
+	info.Digest = fmt.Sprintf("sha256:%x", sum)
 
 	return info, nil
 }
@@ -212,7 +216,7 @@ func SearchMLXModels(query string, limit int) ([]HuggingFaceModelInfo, error) {
 }
 
 // DownloadMLXModel downloads an MLX model from HuggingFace
-func (m *MLXModelManager) DownloadMLXModel(modelID string, progressFn func(string, float64)) error {
+func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, progressFn func(string, float64)) error {
 	// This is a simplified version - in production, you'd want to:
 	// 1. Use the HuggingFace hub API to list files
 	// 2. Download each file with proper progress tracking
@@ -225,6 +229,13 @@ func (m *MLXModelManager) DownloadMLXModel(modelID string, progressFn func(strin
 	if err := os.MkdirAll(modelPath, 0755); err != nil {
 		return fmt.Errorf("failed to create model directory: %w", err)
 	}
+
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.RemoveAll(modelPath)
+		}
+	}()
 
 	// Required files for an MLX model
 	requiredFiles := []string{
@@ -249,17 +260,30 @@ func (m *MLXModelManager) DownloadMLXModel(modelID string, progressFn func(strin
 	totalFiles := len(allFiles)
 	downloadedFiles := 0
 
+	client := &http.Client{Timeout: 10 * time.Minute}
+
+	updateProgress := func(status string, completed int) {
+		if progressFn == nil {
+			return
+		}
+		pct := (float64(completed) / float64(totalFiles)) * 100
+		progressFn(status, math.Round(pct))
+	}
+
 	for _, filename := range allFiles {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fileURL := fmt.Sprintf("%s/%s", baseURL, filename)
 		destPath := filepath.Join(modelPath, filename)
 
-		if progressFn != nil {
-			progress := float64(downloadedFiles) / float64(totalFiles) * 100
-			progressFn(fmt.Sprintf("Downloading %s", filename), progress)
-		}
+		updateProgress(fmt.Sprintf("downloading %s", filename), downloadedFiles)
 
 		// Download file
-		if err := m.downloadFile(fileURL, destPath); err != nil {
+		if err := m.downloadFile(ctx, client, fileURL, destPath); err != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			// If it's a required file, fail
 			isRequired := false
 			for _, req := range requiredFiles {
@@ -276,35 +300,57 @@ func (m *MLXModelManager) DownloadMLXModel(modelID string, progressFn func(strin
 		}
 
 		downloadedFiles++
+		updateProgress(fmt.Sprintf("downloaded %s", filename), downloadedFiles)
 	}
 
 	if progressFn != nil {
 		progressFn("Download complete", 100)
 	}
 
+	cleanup = false
+
 	return nil
 }
 
 // downloadFile downloads a file from a URL to a local path
-func (m *MLXModelManager) downloadFile(url, destPath string) error {
-	resp, err := http.Get(url)
+func (m *MLXModelManager) downloadFile(ctx context.Context, client *http.Client, url, destPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(destPath)
+	tmpPath := destPath + ".part"
+	out, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	if _, err = io.Copy(out, resp.Body); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // GetPopularMLXModels returns a curated list of popular/recommended MLX models

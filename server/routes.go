@@ -1858,6 +1858,12 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
+	// MLX chat path (supports tools in non-stream mode for now)
+	if IsMLXModelReference(req.Model) {
+		s.chatMLXModel(c, &req)
+		return
+	}
+
 	name := model.ParseName(req.Model)
 	if !name.IsValid() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model is required"})

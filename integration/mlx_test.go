@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +33,7 @@ func TestMLXBackendLoading(t *testing.T) {
 			t.Logf("Download progress: %s (%.1f%%)", status, progress)
 		}
 
-		err := manager.DownloadMLXModel(testModel, progressFn)
+		err := manager.DownloadMLXModel(context.Background(), testModel, progressFn)
 		if err != nil {
 			t.Logf("Failed to download test model (expected if offline): %v", err)
 			t.Skip("cannot download test model")
@@ -295,7 +296,7 @@ func TestMLXModelPull(t *testing.T) {
 		}
 	}
 
-	err = manager.DownloadMLXModel(testModel, progressFn)
+	err = manager.DownloadMLXModel(context.Background(), testModel, progressFn)
 	if err != nil {
 		t.Fatalf("Failed to download model: %v", err)
 	}

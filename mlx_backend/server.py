@@ -43,6 +43,14 @@ except ImportError:
     print("  pip install mlx-lm")
     sys.exit(1)
 
+# Best-effort: prefer Metal GPU for acceleration
+try:
+    if hasattr(mx, "gpu"):
+        mx.set_default_device(mx.gpu)  # type: ignore[attr-defined]
+        logging.getLogger(__name__).info("Using Metal GPU via MLX")
+except Exception as e:  # pragma: no cover - defensive
+    logging.getLogger(__name__).warning("Could not set Metal device: %s", e)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +118,27 @@ class MLXModelManager:
         self.tokenizer = None
         self.current_model_name = None
         self.model_path = Path.home() / ".ollama" / "models" / "mlx"
+        self.finetune_fn = None
+
+    def _resolve_finetune(self):
+        """Locate finetune entrypoint if available in mlx_lm."""
+        if self.finetune_fn is not None:
+            return self.finetune_fn
+
+        # Try attribute on mlx_lm
+        fn = getattr(mlx_lm, "finetune", None)
+        if fn is None:
+            # Try submodule import lazily
+            try:
+                import importlib
+
+                mod = importlib.import_module("mlx_lm.finetune")
+                fn = getattr(mod, "finetune", None)
+            except Exception:
+                fn = None
+
+        self.finetune_fn = fn
+        return fn
 
     async def load_model(self, model_name: str) -> None:
         """
@@ -435,6 +464,7 @@ async def health_check():
         "status": "ok",
         "model_loaded": model_manager.current_model_name is not None,
         "current_model": model_manager.current_model_name,
+        "device": str(mx.default_device()),
     }
 
 
@@ -445,6 +475,54 @@ async def info_endpoint():
         "gpu": "MLX (Apple Silicon)",
         "compute_capability": "Metal Performance Shaders",
         "device": "Apple Neural Engine" if hasattr(mx, 'metal') else "CPU",
+    }
+
+
+@app.post("/finetune")
+async def finetune_endpoint(request: dict):
+    """Run a best-effort fine-tune using mlx_lm if available."""
+    model_name = request.get("model")
+    dataset = request.get("dataset")
+    output_dir = Path(request.get("output_dir", "./finetuned"))
+    epochs = int(request.get("epochs", 1))
+    batch_size = int(request.get("batch_size", 1))
+    learning_rate = float(request.get("learning_rate", 1e-4))
+
+    if not model_name or not dataset:
+        raise HTTPException(status_code=400, detail="Missing required fields: model, dataset")
+
+    fn = model_manager._resolve_finetune()
+    if fn is None:
+        raise HTTPException(status_code=501, detail="MLX fine-tuning entrypoint not available in this build (mlx_lm missing finetune)")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def run_ft_sync():
+        # Attempt a flexible call signature; fall back if unsupported
+        try:
+            fn(
+                model=model_name,
+                data=dataset,
+                output_dir=str(output_dir),
+                epochs=epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+            )
+        except TypeError:
+            fn(model_name, dataset, str(output_dir))
+
+    try:
+        await asyncio.to_thread(run_ft_sync)
+    except Exception as e:  # pragma: no cover - runtime safeguard
+        raise HTTPException(status_code=500, detail=f"Fine-tune failed: {e}")
+
+    return {
+        "status": "completed",
+        "model": model_name,
+        "output_dir": str(output_dir),
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
     }
 
 

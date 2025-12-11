@@ -6,6 +6,15 @@ This document describes the technical architecture of ollmlx's MLX integration.
 
 ollmlx extends Ollama's inference layer to support Apple's MLX framework while maintaining 100% API compatibility. The integration uses a hybrid architecture where the Go server layer proxies requests to either the traditional llama.cpp backend (for GGUF models) or a Python MLX backend (for MLX models).
 
+**Runtime parity highlights (current implementation):**
+- `server/routes_mlx.go` starts the MLX runner on a random local port, waits for `/health`, and calls `/load` before serving completions.
+- Streaming completions are proxied line-for-line into Ollama's `GenerateResponse` NDJSON format (metrics populated in the `Metrics` block; logprobs passthrough-ready).
+- Non-streaming completions aggregate the content and return the final `GenerateResponse` just like the GGUF path.
+- Pull progress now uses a stable digest (SHA-256 of model name) so CLI progress bars behave like standard `ollama pull`.
+- Experimental `/finetune` endpoint calls into `mlx_lm` fine-tune if available; returns 501 otherwise.
+- MLX backend attempts to default to Metal GPU at startup for acceleration.
+- `ollmlx run --verbose` surfaces Apple Silicon / MLX tuning tips (Metal, 4-bit MLX models, cache location).
+
 ## Architecture Diagram
 
 ```

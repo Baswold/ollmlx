@@ -14,9 +14,21 @@ ollmlx is a **drop-in replacement** for Ollama that swaps the GGUF/llama.cpp bac
 
 - **⚡ Faster inference on Apple Silicon** (M1/M2/M3) by running MLX-native weights
 - **🔄 Exact Ollama API/CLI compatibility** – same commands/endpoints/ports
-- **📦 MLX model support** – pull HF `mlx-community/*` or `*-mlx` models directly
+- **📦 MLX model support** – pull HF `mlx-community/*` or `*-mlx` models directly (progress bars use stable digests for MLX pulls; tool-calling not yet supported on MLX)
 - **🧠 Unified memory efficiency** – takes advantage of MLX on macOS
 - **💡 Simple swap** – keep your tools/IDE integrations; just point them at ollmlx
+- **⚙️ Fine-tuning hook (experimental)** – `/finetune` endpoint passes through to `mlx_lm` fine-tune when available
+- **🎛️ Metal acceleration** – best-effort default to MLX Metal device at backend start
+
+**CLI parity:**
+- Same verbs/flags as `ollama` (`pull`, `run`, `create`, `list`, `ps`, `rm`, `serve`), only the binary name changes to `ollmlx`.
+- Same env vars (`OLLAMA_HOST`, `OLLAMA_MODELS`, etc.) and streaming response format, so existing scripts and clients keep working.
+- Same HTTP API surface (`/api/generate`, `/api/chat`, `/api/pull`, …) on the same default port (11434).
+
+**Vision (from `what_i_want.md`):**
+- Apple Silicon–focused: leverage MLX for faster inference on M1/M2/M3 while keeping every Ollama surface identical.
+- MLX-first: prefer MLX models from Hugging Face; use upstream Ollama for GGUF.
+- Zero client changes: IDEs, Copilot, LangChain, etc., continue to work by pointing at `ollmlx` on `localhost:11434`.
 
 ## 🚀 Quick Start
 
@@ -29,14 +41,15 @@ ollmlx is a **drop-in replacement** for Ollama that swaps the GGUF/llama.cpp bac
 git clone https://github.com/ollama/ollama.git
 cd ollama
 
-# Build ollmlx (uses OLLAMA_MODELS for both GGUF and MLX caches; MLX stored under $(OLLAMA_MODELS)/mlx)
-go build -o ollmlx .
-
-# Install Python dependencies
-pip install -r mlx_backend/requirements.txt
+# Easy install (builds binary + installs MLX Python deps)
+./scripts/install_ollmlx.sh
 
 # Start the server
 ./ollmlx serve
+
+# Pull and run an MLX model
+ollmlx pull mlx-community/SmolLM2-135M-Instruct-4bit
+echo "Hello" | ollmlx run mlx-community/SmolLM2-135M-Instruct-4bit
 
 # Optional: relocate caches
 # export OLLAMA_MODELS=~/ollmlx-models
@@ -64,6 +77,24 @@ curl http://localhost:11434/api/generate -d '{
   "prompt": "Explain quantum computing in simple terms.",
   "stream": false
 }'
+
+### 4. Fine-tune (experimental)
+
+```bash
+curl -X POST http://localhost:11434/finetune \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "mlx-community/SmolLM2-135M-Instruct-4bit",
+        "dataset": "/path/to/data.jsonl",
+        "output_dir": "./finetuned-smollm2",
+        "epochs": 1,
+        "batch_size": 1,
+        "learning_rate": 1e-4
+      }'
+```
+> Uses `mlx_lm` fine-tune if available; otherwise returns 501.
+
+> Tool-calling note: MLX models currently return 501 if `tools` are provided; use standard Ollama for tool-enabled workflows.
 ```
 
 ## 📊 Performance Comparison
@@ -313,6 +344,12 @@ pip install -r mlx_backend/requirements.txt
 
 # Verify Python version
 python3 --version  # Should be 3.10+
+
+# Inspect runner logs (stderr)
+# Look for lines mentioning mlx_backend/server.py
+
+# Remove a bad cached model if needed
+rm -rf "$OLLAMA_MODELS/mlx/<model-name>"
 ```
 
 #### Model download fails

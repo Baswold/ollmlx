@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -56,14 +57,19 @@ func (s *Server) startMLXBackend(ctx context.Context) error {
 		pythonExe = s.pythonPath
 	}
 
-	// Get the MLX backend server path
-	mlxBackendPath := filepath.Join(filepath.Dir(s.modelPath), "..", "..", "..", "mlx_backend", "server.py")
-	if _, err := os.Stat(mlxBackendPath); os.IsNotExist(err) {
-		// Try relative to current directory
-		mlxBackendPath = filepath.Join("mlx_backend", "server.py")
-		if _, err := os.Stat(mlxBackendPath); os.IsNotExist(err) {
-			return fmt.Errorf("MLX backend server not found at %s", mlxBackendPath)
+	// Locate the MLX backend server script
+	var mlxBackendPath string
+	for _, candidate := range []string{
+		filepath.Join("mlx_backend", "server.py"),
+		filepath.Join(filepath.Dir(s.modelPath), "..", "..", "..", "mlx_backend", "server.py"),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			mlxBackendPath = candidate
+			break
 		}
+	}
+	if mlxBackendPath == "" {
+		return fmt.Errorf("MLX backend server not found")
 	}
 
 	// Allocate a random port for the MLX backend
@@ -134,15 +140,15 @@ func (s *Server) load(w http.ResponseWriter, r *http.Request) {
 
 	// The model should already be set from command line, but we can accept it here too
 	var req llm.LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	slog.Info("loading model into MLX backend", "model", s.modelPath)
 
-	// Send load request to MLX backend
-	loadReq := LoadRequest{ModelPath: s.modelPath}
+	// Send load request to MLX backend using model name
+	loadReq := map[string]string{"model": s.modelPath}
 	reqBody, err := json.Marshal(loadReq)
 	if err != nil {
 		slog.Error("failed to marshal MLX load request", "error", err)

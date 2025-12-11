@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,7 +130,7 @@ func TestMLXModelPull(t *testing.T) {
 			t.Logf("Progress: %s (%.1f%%)", status, progress)
 		}
 
-		err := manager.DownloadMLXModel(testModel, progressFn)
+		err := manager.DownloadMLXModel(context.Background(), testModel, progressFn)
 		if err != nil {
 			t.Fatalf("failed to download model: %v", err)
 		}
