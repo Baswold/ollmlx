@@ -14,6 +14,7 @@ ollmlx extends Ollama's inference layer to support Apple's MLX framework while m
 - Experimental `/finetune` endpoint calls into `mlx_lm` fine-tune if available; returns 501 otherwise.
 - MLX backend attempts to default to Metal GPU at startup for acceleration.
 - `ollmlx run --verbose` surfaces Apple Silicon / MLX tuning tips (Metal, 4-bit MLX models, cache location).
+- See [Apple Silicon Optimization Guide](./apple_silicon_optimization.md) for practical steps to extract more performance from MLX on macOS.
 
 ## Architecture Diagram
 
