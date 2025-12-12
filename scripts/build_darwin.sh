@@ -44,6 +44,7 @@ _build_darwin() {
         status "Building darwin $ARCH"
         INSTALL_PREFIX=dist/darwin-$ARCH/
         GOOS=darwin GOARCH=$ARCH CGO_ENABLED=1 go build -o $INSTALL_PREFIX .
+        GOOS=darwin GOARCH=$ARCH CGO_ENABLED=1 go build -o $INSTALL_PREFIX ./cmd/runner
 
         if [ "$ARCH" = "amd64" ]; then
             status "Building darwin $ARCH dynamic backends"
@@ -61,10 +62,12 @@ _sign_darwin() {
     status "Creating universal binary..."
     mkdir -p dist/darwin
     lipo -create -output dist/darwin/ollama dist/darwin-*/ollama
+    lipo -create -output dist/darwin/ollama-runner dist/darwin-*/ollama-runner
     chmod +x dist/darwin/ollama
+    chmod +x dist/darwin/ollama-runner
 
     if [ -n "$APPLE_IDENTITY" ]; then
-        for F in dist/darwin/ollama dist/darwin-amd64/lib/ollama/*; do
+        for F in dist/darwin/ollama dist/darwin/ollama-runner dist/darwin-amd64/lib/ollama/*; do
             codesign -f --timestamp -s "$APPLE_IDENTITY" --identifier ai.ollama.ollama --options=runtime $F
         done
 
@@ -76,7 +79,7 @@ _sign_darwin() {
     fi
 
     status "Creating universal tarball..."
-    tar -cf dist/ollama-darwin.tar --strip-components 2 dist/darwin/ollama
+    tar -cf dist/ollama-darwin.tar --strip-components 2 dist/darwin/ollama dist/darwin/ollama-runner
     tar -rf dist/ollama-darwin.tar --strip-components 4 dist/darwin-amd64/lib/
     gzip -9vc <dist/ollama-darwin.tar >dist/ollama-darwin.tgz
 }

@@ -228,6 +228,11 @@ function ollama {
     & go build -trimpath -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$script:VERSION -X=github.com/ollama/ollama/server.mode=release" .
     if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
     cp .\ollama.exe "${script:DIST_DIR}\"
+
+    write-host "Building ollama runner"
+    & go build -trimpath -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$script:VERSION" -o ollama-runner.exe ./cmd/runner
+    if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
+    cp .\ollama-runner.exe "${script:DIST_DIR}\"
 }
 
 function app {

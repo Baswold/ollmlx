@@ -146,7 +146,8 @@ ENV CGO_ENABLED=1
 ARG CGO_CFLAGS
 ARG CGO_CXXFLAGS
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -buildmode=pie -o /bin/ollama .
+    go build -trimpath -buildmode=pie -o /bin/ollama . && \
+    go build -trimpath -buildmode=pie -o /bin/ollama-runner ./cmd/runner
 
 FROM --platform=linux/amd64 scratch AS amd64
 # COPY --from=cuda-11 dist/lib/ollama/ /lib/ollama/
@@ -168,6 +169,7 @@ FROM ${FLAVOR} AS archive
 ARG VULKANVERSION
 COPY --from=cpu dist/lib/ollama /lib/ollama
 COPY --from=build /bin/ollama /bin/ollama
+COPY --from=build /bin/ollama-runner /bin/ollama-runner
 
 FROM ubuntu:24.04
 RUN apt-get update \

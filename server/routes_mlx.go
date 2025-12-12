@@ -15,13 +15,17 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/llm"
+	"github.com/ollama/ollama/ml"
 )
 
 // PullMLXModel downloads an MLX model from HuggingFace
@@ -84,10 +88,64 @@ func startMLXRunner(ctx context.Context, modelName string) (*exec.Cmd, int, erro
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
-	cmd := exec.CommandContext(ctx, "go", "run", "./runner/mlxrunner/runner.go", "-model", modelName, "-port", strconv.Itoa(port))
+	bin, err := mlxRunnerBinary()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	args := []string{"--mlx-engine", "-model", modelName, "-port", strconv.Itoa(port)}
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, port, nil
+}
+
+func mlxRunnerBinary() (string, error) {
+	if override := envconfig.Var("OLLAMA_MLX_RUNNER"); override != "" {
+		if info, err := os.Stat(override); err == nil && info.Mode().IsRegular() {
+			return override, nil
+		} else if err != nil {
+			return "", fmt.Errorf("invalid OLLAMA_MLX_RUNNER path: %w", err)
+		}
+	}
+
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+
+	wd, _ := os.Getwd()
+
+	candidates := []string{
+		filepath.Join(exeDir, "ollama-runner"),
+		filepath.Join(exeDir, "mlxrunner"),
+		filepath.Join(ml.LibOllamaPath, "ollama-runner"),
+		filepath.Join(ml.LibOllamaPath, "mlxrunner"),
+		filepath.Join(wd, "bin", "ollama-runner"),
+		filepath.Join(wd, "ollama-runner"),
+	}
+
+	for _, candidate := range candidates {
+		options := []string{candidate}
+		if runtime.GOOS == "windows" {
+			options = append(options, candidate+".exe")
+		}
+
+		for _, path := range options {
+			if path == "" {
+				continue
+			}
+			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+				return path, nil
+			}
+		}
+	}
+
+	if path, err := exec.LookPath("ollama-runner"); err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("mlx runner binary not found; set OLLAMA_MLX_RUNNER to the runner path")
 }
 
 func waitForMLXRunner(ctx context.Context, client *http.Client, port int) error {
