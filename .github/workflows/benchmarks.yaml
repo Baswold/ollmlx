@@ -1,0 +1,79 @@
+name: generation-benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of measured runs per backend"
+        required: false
+        default: "3"
+      warmup:
+        description: "Number of warmup runs"
+        required: false
+        default: "1"
+      prompt:
+        description: "Prompt used for benchmarking"
+        required: false
+        default: "Explain the trade-offs between throughput and latency for LLM inference."
+      mlx_model:
+        description: "MLX model to benchmark"
+        required: false
+        default: "mlx-community/Llama-3.2-1B-Instruct-4bit"
+      gguf_model:
+        description: "GGUF model to benchmark"
+        required: false
+        default: "Llama-3.2-1B-Instruct"
+      skip_gguf:
+        description: "Skip GGUF benchmarking (MLX only)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  generation-benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build ollmlx CLI
+        run: go build -o ollmlx .
+
+      - name: Install ollama CLI for GGUF
+        if: ${{ inputs.skip_gguf != true }}
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          ollama serve > /tmp/ollama.log 2>&1 & echo $! > /tmp/ollama.pid
+          sleep 5
+
+      - name: Run generation benchmarks
+        env:
+          OLLAMA_HOST: http://localhost:11434
+        run: |
+          SKIP="${{ inputs.skip_gguf }}"
+          python3 scripts/bench/generation_benchmark.py \
+            --mlx-model "${{ inputs.mlx_model }}" \
+            --gguf-model "${{ inputs.gguf_model }}" \
+            --prompt "${{ inputs.prompt }}" \
+            --iterations "${{ inputs.iterations }}" \
+            --warmup "${{ inputs.warmup }}" \
+            $([ "$SKIP" = 'true' ] && echo "--skip-gguf") \
+            --output benchmark-results.json
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generation-benchmarks
+          path: benchmark-results.json
+
+      - name: Stop ollama service
+        if: ${{ always() && inputs.skip_gguf != true }}
+        run: |
+          if [ -f /tmp/ollama.pid ]; then
+            kill $(cat /tmp/ollama.pid) || true
+          fi
