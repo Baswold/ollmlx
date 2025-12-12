@@ -160,14 +160,16 @@ func (s *Server) scheduleRunner(ctx context.Context, name string, caps []model.C
 
 func (s *Server) GenerateHandler(c *gin.Context) {
 	checkpointStart := time.Now()
-	var req api.GenerateRequest
-	if err := c.ShouldBindJSON(&req); errors.Is(err, io.EOF) {
+	req, warnings, err := bindGenerateWithMLXCompat(c)
+	if errors.Is(err, io.EOF) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "missing request body"})
 		return
 	} else if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	emitMLXCompatWarnings(c, req.Model, warnings)
 
 	if req.TopLogprobs < 0 || req.TopLogprobs > 20 {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "top_logprobs must be between 0 and 20"})
@@ -191,7 +193,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 
 	// We cannot currently consolidate this into GetModel because all we'll
 	// induce infinite recursion given the current code structure.
-	name, err := getExistingName(name)
+	name, err = getExistingName(name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
 		return
@@ -1844,14 +1846,16 @@ func toolCallId() string {
 func (s *Server) ChatHandler(c *gin.Context) {
 	checkpointStart := time.Now()
 
-	var req api.ChatRequest
-	if err := c.ShouldBindJSON(&req); errors.Is(err, io.EOF) {
+	req, warnings, err := bindChatWithMLXCompat(c)
+	if errors.Is(err, io.EOF) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "missing request body"})
 		return
 	} else if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	emitMLXCompatWarnings(c, req.Model, warnings)
 
 	if req.TopLogprobs < 0 || req.TopLogprobs > 20 {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "top_logprobs must be between 0 and 20"})
@@ -1870,7 +1874,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
-	name, err := getExistingName(name)
+	name, err = getExistingName(name)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model is required"})
 		return
