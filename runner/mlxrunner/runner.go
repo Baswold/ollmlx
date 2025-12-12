@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,72 @@ type LoadResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// findProjectRoot walks upward from a starting directory to find the repository
+// root, identified by the presence of a go.mod file.
+func findProjectRoot(start string) string {
+	for dir := filepath.Clean(start); dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return ""
+}
+
+// findMLXBackendPath derives potential locations for the MLX backend server
+// script based on the executable path and repository root, logs each candidate,
+// and returns the first existing path.
+func findMLXBackendPath() (string, error) {
+	var candidates []string
+
+	exePath, exeErr := os.Executable()
+	if exeErr == nil {
+		exeDir := filepath.Dir(exePath)
+		exeRoot := findProjectRoot(exeDir)
+		for _, root := range []string{exeDir, exeRoot} {
+			if root == "" {
+				continue
+			}
+			candidate := filepath.Join(root, "mlx_backend", "server.py")
+			candidates = append(candidates, candidate)
+		}
+	} else {
+		slog.Warn("unable to resolve executable path", "error", exeErr)
+	}
+
+	if wd, err := os.Getwd(); err == nil {
+		if projectRoot := findProjectRoot(wd); projectRoot != "" {
+			candidates = append(candidates, filepath.Join(projectRoot, "mlx_backend", "server.py"))
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var uniqueCandidates []string
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		uniqueCandidates = append(uniqueCandidates, candidate)
+	}
+
+	for _, candidate := range uniqueCandidates {
+		slog.Info("checking MLX backend candidate", "path", candidate)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	if exeErr != nil {
+		exePath = "<unknown>"
+	}
+	wd, _ := os.Getwd()
+	return "", fmt.Errorf("MLX backend server not found; candidates: %s; executable: %s; working directory: %s", strings.Join(uniqueCandidates, ", "), exePath, wd)
+}
+
 // startMLXBackend launches the Python MLX backend server
 func (s *Server) startMLXBackend(ctx context.Context) error {
 	// Find Python executable
@@ -58,18 +125,9 @@ func (s *Server) startMLXBackend(ctx context.Context) error {
 	}
 
 	// Locate the MLX backend server script
-	var mlxBackendPath string
-	for _, candidate := range []string{
-		filepath.Join("mlx_backend", "server.py"),
-		filepath.Join(filepath.Dir(s.modelPath), "..", "..", "..", "mlx_backend", "server.py"),
-	} {
-		if _, err := os.Stat(candidate); err == nil {
-			mlxBackendPath = candidate
-			break
-		}
-	}
-	if mlxBackendPath == "" {
-		return fmt.Errorf("MLX backend server not found")
+	mlxBackendPath, err := findMLXBackendPath()
+	if err != nil {
+		return err
 	}
 
 	// Allocate a random port for the MLX backend
