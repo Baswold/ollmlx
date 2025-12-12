@@ -117,7 +117,19 @@ class MLXModelManager:
         self.model = None
         self.tokenizer = None
         self.current_model_name = None
-        self.model_path = Path.home() / ".ollama" / "models" / "mlx"
+        default_model_path = Path.home() / ".ollama" / "models" / "mlx"
+        env_model_path = os.environ.get("OLLAMA_MODELS", str(default_model_path))
+        self.model_path = Path(env_model_path).expanduser()
+        self.model_path.mkdir(parents=True, exist_ok=True)
+
+        # Ensure Hugging Face downloads also use this cache location
+        if not os.environ.get("HUGGINGFACE_HUB_CACHE"):
+            os.environ["HUGGINGFACE_HUB_CACHE"] = str(self.model_path)
+
+        if not os.environ.get("HF_HOME"):
+            os.environ["HF_HOME"] = str(self.model_path)
+
+        logger.info("Using MLX model path: %s", self.model_path)
         self.finetune_fn = None
 
     def _resolve_finetune(self):
