@@ -657,7 +657,7 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 	runnerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd, port, err := startMLXRunner(runnerCtx, req.Model)
+	cmd, port, err := startMLXRunner(runnerCtx, localName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start MLX runner: %v", err)})
 		return
@@ -679,7 +679,7 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 		return
 	}
 
-	if err := loadMLXModel(runnerCtx, client, port, req.Model); err != nil {
+	if err := loadMLXModel(runnerCtx, client, port, localName); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

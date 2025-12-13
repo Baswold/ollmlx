@@ -117,9 +117,14 @@ class MLXModelManager:
         self.model = None
         self.tokenizer = None
         self.current_model_name = None
-        default_model_path = Path.home() / ".ollama" / "models" / "mlx"
-        env_model_path = os.environ.get("OLLAMA_MODELS", str(default_model_path))
-        self.model_path = Path(env_model_path).expanduser()
+        # Respect OLLAMA_MODELS environment variable like the Go code does
+        default_base_path = Path.home() / ".ollama" / "models"
+        env_base_path = os.environ.get("OLLAMA_MODELS")
+        if env_base_path:
+            base_path = Path(env_base_path).expanduser()
+        else:
+            base_path = default_base_path
+        self.model_path = base_path / "mlx"
         self.model_path.mkdir(parents=True, exist_ok=True)
 
         # Ensure Hugging Face downloads also use this cache location
