@@ -80,6 +80,11 @@ type mlxCompletionChunk struct {
 	Logprobs           any           `json:"logprobs"`
 }
 
+var (
+	startMLXRunnerFunc = startMLXRunner
+	loadMLXModelFunc   = loadMLXModel
+)
+
 func startMLXRunner(ctx context.Context, modelName string) (*exec.Cmd, int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -563,6 +568,7 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 	ctx := c.Request.Context()
 	manager := llm.NewMLXModelManager()
 	modelName := req.Model
+	localName := strings.ReplaceAll(modelName, "/", "_")
 
 	if !manager.ModelExists(modelName) {
 		slog.Info("MLX model missing locally, downloading from Hugging Face", "model", modelName)
@@ -586,7 +592,7 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 	runnerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd, port, err := startMLXRunner(runnerCtx, req.Model)
+	cmd, port, err := startMLXRunnerFunc(runnerCtx, localName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start MLX runner: %v", err)})
 		return
@@ -608,7 +614,7 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 		return
 	}
 
-	if err := loadMLXModel(runnerCtx, client, port, req.Model); err != nil {
+	if err := loadMLXModelFunc(runnerCtx, client, port, localName); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
