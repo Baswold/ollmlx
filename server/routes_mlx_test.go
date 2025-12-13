@@ -16,7 +16,30 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/envconfig"
 )
+
+func TestStartMLXRunnerPropagatesModelsEnv(t *testing.T) {
+	t.Setenv("OLLAMA_MODELS", t.TempDir())
+
+	cmd, _, err := startMLXRunner(context.Background(), "test-model")
+	if err != nil {
+		t.Fatalf("startMLXRunner() error = %v", err)
+	}
+
+	expected := fmt.Sprintf("OLLAMA_MODELS=%s", envconfig.Models())
+	found := false
+	for _, env := range cmd.Env {
+		if env == expected {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected runner environment to include %q", expected)
+	}
+}
 
 func TestGenerateMLXModelUsesLocalName(t *testing.T) {
 	gin.SetMode(gin.TestMode)

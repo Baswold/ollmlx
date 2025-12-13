@@ -102,6 +102,7 @@ func startMLXRunner(ctx context.Context, modelName string) (*exec.Cmd, int, erro
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), fmt.Sprintf("OLLAMA_MODELS=%s", envconfig.Models()))
 	return cmd, port, nil
 }
 
