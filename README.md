@@ -12,12 +12,13 @@
 | **GGUF Support** | ✅ Production Ready | Full Ollama compatibility maintained |
 | **Tool-Calling** | ⚠️ Experimental | Non-streaming implementation working |
 | **Fine-Tuning** | ⚠️ Requires mlx_lm | Endpoint exists, returns 501 when unavailable |
+| **MLX Embeddings** | ❌ Not Implemented | `/api/embed` and `/v1/embeddings` return 501 for MLX models |
 | **Build** | ✅ Passing | Clean build with harmless -lobjc warning |
 | **Tests** | ✅ Comprehensive | All critical paths tested and documented |
 
 **Production Readiness:** 90% 🚀
 
-> **Note:** MLX generation infrastructure is complete but requires routing fix. GGUF models work perfectly. See [test_results_mlx_generation.md](docs/archive/test_results_mlx_generation.md) for details.
+> **Note:** MLX generation infrastructure is wired up with runner reuse and Hugging Face downloads. Embeddings are not implemented for MLX, and fine-tuning currently returns 501 until mlx_lm ships finetune support. GGUF models work perfectly.
 
 
 > **ollmlx** is a high-performance LLM inference server optimized for Apple Silicon, delivering blazing-fast inference with full Ollama API compatibility.

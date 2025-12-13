@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -70,20 +71,197 @@ func PullMLXModel(ctx context.Context, modelName string, fn func(api.ProgressRes
 }
 
 type mlxCompletionChunk struct {
-	Content            string        `json:"content"`
-	Done               bool          `json:"done"`
-	DoneReason         string        `json:"done_reason"`
-	PromptEvalCount    int           `json:"prompt_eval_count"`
-	PromptEvalDuration time.Duration `json:"prompt_eval_duration"`
-	EvalCount          int           `json:"eval_count"`
-	EvalDuration       time.Duration `json:"eval_duration"`
-	Logprobs           any           `json:"logprobs"`
+	Content            string         `json:"content"`
+	Done               bool           `json:"done"`
+	DoneReason         string         `json:"done_reason"`
+	PromptEvalCount    int            `json:"prompt_eval_count"`
+	PromptEvalDuration time.Duration  `json:"prompt_eval_duration"`
+	EvalCount          int            `json:"eval_count"`
+	EvalDuration       time.Duration  `json:"eval_duration"`
+	Logprobs           any            `json:"logprobs"`
+	ToolCalls          []api.ToolCall `json:"tool_calls"`
 }
 
 var (
 	startMLXRunnerFunc = startMLXRunner
 	loadMLXModelFunc   = loadMLXModel
 )
+
+type mlxRunnerEntry struct {
+	model     string
+	port      int
+	cmd       *exec.Cmd
+	client    *http.Client
+	cancel    context.CancelFunc
+	ready     chan struct{}
+	err       error
+	lastUsed  time.Time
+	keepalive time.Duration
+}
+
+type mlxRunnerCache struct {
+	mu       sync.Mutex
+	entries  map[string]*mlxRunnerEntry
+	ticker   *time.Ticker
+	shutdown chan struct{}
+}
+
+func newMLXRunnerCache() *mlxRunnerCache {
+	c := &mlxRunnerCache{
+		entries:  make(map[string]*mlxRunnerEntry),
+		ticker:   time.NewTicker(30 * time.Second),
+		shutdown: make(chan struct{}),
+	}
+
+	go func() {
+		for {
+			select {
+			case <-c.ticker.C:
+				c.evictExpired()
+			case <-c.shutdown:
+				c.ticker.Stop()
+				return
+			}
+		}
+	}()
+
+	return c
+}
+
+func (c *mlxRunnerCache) touch(model string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.entries[model]; ok {
+		entry.lastUsed = time.Now()
+	}
+}
+
+func (c *mlxRunnerCache) evict(model string) {
+	c.mu.Lock()
+	entry, ok := c.entries[model]
+	if ok {
+		delete(c.entries, model)
+	}
+	c.mu.Unlock()
+	if ok {
+		c.stopEntry(entry)
+	}
+}
+
+func (c *mlxRunnerCache) evictExpired() {
+	now := time.Now()
+	var stale []*mlxRunnerEntry
+
+	c.mu.Lock()
+	for k, v := range c.entries {
+		if v.keepalive > 0 && now.Sub(v.lastUsed) > v.keepalive {
+			stale = append(stale, v)
+			delete(c.entries, k)
+		}
+	}
+	c.mu.Unlock()
+
+	for _, v := range stale {
+		c.stopEntry(v)
+	}
+}
+
+func (c *mlxRunnerCache) stopEntry(entry *mlxRunnerEntry) {
+	if entry == nil {
+		return
+	}
+	if entry.cancel != nil {
+		entry.cancel()
+	}
+	if entry.cmd != nil && entry.cmd.Process != nil {
+		_ = entry.cmd.Process.Kill()
+	}
+}
+
+func (c *mlxRunnerCache) getRunner(ctx context.Context, model string, keepalive time.Duration) (*mlxRunnerEntry, error) {
+	if keepalive < 0 {
+		keepalive = 0
+	}
+
+	c.mu.Lock()
+	if existing, ok := c.entries[model]; ok {
+		if keepalive > existing.keepalive {
+			existing.keepalive = keepalive
+		}
+		existing.lastUsed = time.Now()
+		entry := existing
+		c.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-entry.ready:
+			if entry.err != nil {
+				return nil, entry.err
+			}
+			return entry, nil
+		}
+	}
+
+	entry := &mlxRunnerEntry{
+		model:     model,
+		keepalive: keepalive,
+		ready:     make(chan struct{}),
+		lastUsed:  time.Now(),
+		client:    &http.Client{Timeout: 5 * time.Minute},
+	}
+	c.entries[model] = entry
+	c.mu.Unlock()
+
+	go func() {
+		bgCtx, cancel := context.WithCancel(context.Background())
+		entry.cancel = cancel
+
+		cmd, port, err := startMLXRunnerFunc(bgCtx, model)
+		if err != nil {
+			entry.err = err
+			close(entry.ready)
+			return
+		}
+		entry.cmd = cmd
+		entry.port = port
+
+		if err := entry.cmd.Start(); err != nil {
+			entry.err = err
+			close(entry.ready)
+			return
+		}
+
+		if err := waitForMLXRunner(bgCtx, entry.client, port); err != nil {
+			entry.err = err
+			_ = entry.cmd.Process.Kill()
+			close(entry.ready)
+			return
+		}
+
+		if err := loadMLXModelFunc(bgCtx, entry.client, port, model); err != nil {
+			entry.err = err
+			_ = entry.cmd.Process.Kill()
+			close(entry.ready)
+			return
+		}
+
+		close(entry.ready)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-entry.ready:
+		if entry.err != nil {
+			c.evict(model)
+			return nil, entry.err
+		}
+		return entry, nil
+	}
+}
+
+var mlxRunnerPool = newMLXRunnerCache()
 
 func startMLXRunner(ctx context.Context, modelName string) (*exec.Cmd, int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -151,7 +329,59 @@ func mlxRunnerBinary() (string, error) {
 		return path, nil
 	}
 
+	if path, err := buildTempRunnerBinary(); err == nil {
+		return path, nil
+	} else {
+		slog.Debug("failed to build temporary mlx runner", "error", err)
+	}
+
 	return "", fmt.Errorf("mlx runner binary not found; set OLLAMA_MLX_RUNNER to the runner path")
+}
+
+func findRepoRoot(start string) string {
+	for dir := filepath.Clean(start); dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			break
+		}
+	}
+	return ""
+}
+
+func buildTempRunnerBinary() (string, error) {
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+
+	wd, _ := os.Getwd()
+
+	root := findRepoRoot(exeDir)
+	if root == "" {
+		root = findRepoRoot(wd)
+	}
+	if root == "" {
+		return "", fmt.Errorf("cannot locate repository root to build runner")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ollama-mlxrunner-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	out := filepath.Join(tmpDir, "ollama-runner")
+
+	buildCmd := exec.Command("go", "build", "-o", out, "./cmd/runner")
+	buildCmd.Dir = root
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return "", fmt.Errorf("build runner: %w", err)
+	}
+
+	return out, nil
 }
 
 func waitForMLXRunner(ctx context.Context, client *http.Client, port int) error {
@@ -286,15 +516,15 @@ func streamMLXCompletion(ctx context.Context, c *gin.Context, client *http.Clien
 	return scanner.Err()
 }
 
-func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, port int, req *api.ChatRequest, genReq *api.GenerateRequest) error {
+func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, port int, req *api.ChatRequest, genReq *api.GenerateRequest) ([]api.ToolCall, error) {
 	requestBody, err := json.Marshal(genReq)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/completion", port), "application/json", bytes.NewReader(requestBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -303,10 +533,10 @@ func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, por
 		if err != nil {
 			slog.Error("failed to read MLX backend chat completion response", "error", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to read backend response"})
-			return nil
+			return nil, nil
 		}
 		c.AbortWithStatusJSON(resp.StatusCode, gin.H{"error": strings.TrimSpace(string(msg))})
-		return nil
+		return nil, nil
 	}
 
 	defer resp.Body.Close()
@@ -317,11 +547,12 @@ func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, por
 	flusher, _ := c.Writer.(http.Flusher)
 	created := time.Now().UTC()
 	var full strings.Builder
+	var detectedToolCalls []api.ToolCall
 
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
 
@@ -332,12 +563,16 @@ func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, por
 
 		full.WriteString(chunk.Content)
 		contentOut := chunk.Content
-		var toolCalls []api.ToolCall
-		if chunk.Done {
+		toolCalls := chunk.ToolCalls
+		if len(toolCalls) == 0 && chunk.Done {
 			if calls, ok := parseToolCallsFromText(full.String()); ok {
 				toolCalls = calls
 				contentOut = ""
+				detectedToolCalls = calls
 			}
+		} else if len(toolCalls) > 0 {
+			contentOut = ""
+			detectedToolCalls = toolCalls
 		}
 
 		respMsg := api.Message{Role: "assistant", Content: contentOut, ToolCalls: toolCalls}
@@ -367,7 +602,7 @@ func streamMLXChat(ctx context.Context, c *gin.Context, client *http.Client, por
 		}
 	}
 
-	return scanner.Err()
+	return detectedToolCalls, scanner.Err()
 }
 
 func collectMLXCompletion(ctx context.Context, client *http.Client, port int, req *api.GenerateRequest) (*api.GenerateResponse, error) {
@@ -395,6 +630,7 @@ func collectMLXCompletion(ctx context.Context, client *http.Client, port int, re
 	created := time.Now().UTC()
 	var buf strings.Builder
 	var last mlxCompletionChunk
+	var toolCalls []api.ToolCall
 
 	for scanner.Scan() {
 		select {
@@ -406,6 +642,9 @@ func collectMLXCompletion(ctx context.Context, client *http.Client, port int, re
 		if err := json.Unmarshal(scanner.Bytes(), &last); err != nil {
 			continue
 		}
+		if len(last.ToolCalls) > 0 {
+			toolCalls = last.ToolCalls
+		}
 		buf.WriteString(last.Content)
 		if last.Done {
 			break
@@ -414,6 +653,12 @@ func collectMLXCompletion(ctx context.Context, client *http.Client, port int, re
 
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+
+	if len(toolCalls) > 0 && buf.Len() == 0 {
+		if data, err := json.Marshal(map[string]any{"tool_calls": toolCalls}); err == nil {
+			buf.Write(data)
+		}
 	}
 
 	return &api.GenerateResponse{
@@ -429,6 +674,70 @@ func collectMLXCompletion(ctx context.Context, client *http.Client, port int, re
 			EvalDuration:       last.EvalDuration,
 		},
 	}, nil
+}
+
+// executeToolCalls will synchronously execute provided tool calls using the
+// tool definitions supplied in the request. Currently supports HTTP-style
+// tools where the tool's Items is either a string URL or a map containing a
+// "url" key. The function returns a human-readable aggregation of tool outputs.
+func executeToolCalls(ctx context.Context, tools api.Tools, calls []api.ToolCall) (string, error) {
+	var sb strings.Builder
+	for _, call := range calls {
+		name := call.Function.Name
+		var tool *api.Tool
+		for i := range tools {
+			if tools[i].Function.Name == name {
+				tool = &tools[i]
+				break
+			}
+		}
+		if tool == nil {
+			return "", fmt.Errorf("tool %s not found", name)
+		}
+
+		// Determine endpoint URL for the tool. Support either a string or
+		// an object with a "url" field in Items.
+		var url string
+		switch v := tool.Items.(type) {
+		case string:
+			url = v
+		case map[string]any:
+			if u, ok := v["url"].(string); ok {
+				url = u
+			}
+		default:
+			// attempt to marshal/unmarshal to map to be tolerant
+			var maybe map[string]any
+			b, _ := json.Marshal(v)
+			_ = json.Unmarshal(b, &maybe)
+			if u, ok := maybe["url"].(string); ok {
+				url = u
+			}
+		}
+
+		if url == "" {
+			return "", fmt.Errorf("tool %s has no url configured in Items", name)
+		}
+
+		// Prepare HTTP request with the arguments as JSON
+		body, _ := json.Marshal(call.Function.Arguments)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("create request for tool %s: %w", name, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("tool %s request failed: %w", name, err)
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		sb.WriteString(fmt.Sprintf("Tool %s response:\n%s\n\n", name, strings.TrimSpace(string(respBody))))
+	}
+	return sb.String(), nil
 }
 
 func toolPromptBlock(tools api.Tools) string {
@@ -570,6 +879,10 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 	manager := llm.NewMLXModelManager()
 	modelName := req.Model
 	localName := strings.ReplaceAll(modelName, "/", "_")
+	keepAlive := 5 * time.Minute
+	if req.KeepAlive != nil {
+		keepAlive = req.KeepAlive.Duration
+	}
 
 	if !manager.ModelExists(modelName) {
 		slog.Info("MLX model missing locally, downloading from Hugging Face", "model", modelName)
@@ -590,38 +903,22 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 		return
 	}
 
-	runnerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	cmd, port, err := startMLXRunnerFunc(runnerCtx, localName)
+	entry, err := mlxRunnerPool.getRunner(ctx, localName, keepAlive)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start MLX runner: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to provision MLX runner: %v", err)})
 		return
+	}
+	if keepAlive == 0 {
+		defer mlxRunnerPool.evict(localName)
+	} else {
+		defer mlxRunnerPool.touch(localName)
 	}
 
-	if err := cmd.Start(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to launch MLX runner: %v", err)})
-		return
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	if err := waitForMLXRunner(runnerCtx, client, port); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("MLX runner not ready: %v", err)})
-		return
-	}
-
-	if err := loadMLXModelFunc(runnerCtx, client, port, localName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	client := entry.client
+	port := entry.port
 
 	if req.Stream != nil && !*req.Stream {
-		resp, err := collectMLXCompletion(runnerCtx, client, port, req)
+		resp, err := collectMLXCompletion(ctx, client, port, req)
 		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, context.Canceled) {
@@ -630,11 +927,41 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 			c.JSON(status, gin.H{"error": err.Error()})
 			return
 		}
+
+		// If the model returned tool calls and tools were provided, attempt to
+		// execute them synchronously and re-run the model with the tool outputs
+		// appended to the prompt (non-streaming flow only).
+		if len(req.Tools) > 0 {
+			if toolCalls, ok := parseToolCallsFromText(resp.Response); ok && len(toolCalls) > 0 {
+				toolResults, err := executeToolCalls(ctx, req.Tools, toolCalls)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("tool execution failed: %v", err)})
+					return
+				}
+
+				// Build a follow-up request including the tool outputs for the model
+				followUp := *req
+				followUp.Prompt = req.Prompt + "\n\nTool results:\n" + toolResults
+
+				finalResp, err := collectMLXCompletion(ctx, client, port, &followUp)
+				if err != nil {
+					status := http.StatusInternalServerError
+					if errors.Is(err, context.Canceled) {
+						status = http.StatusRequestTimeout
+					}
+					c.JSON(status, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, finalResp)
+				return
+			}
+		}
+
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 
-	if err := streamMLXCompletion(runnerCtx, c, client, port, req); err != nil && !errors.Is(err, context.Canceled) {
+	if err := streamMLXCompletion(ctx, c, client, port, req); err != nil && !errors.Is(err, context.Canceled) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
 }
@@ -643,6 +970,10 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 	ctx := c.Request.Context()
 	manager := llm.NewMLXModelManager()
 	localName := strings.ReplaceAll(req.Model, "/", "_")
+	keepAlive := 5 * time.Minute
+	if req.KeepAlive != nil {
+		keepAlive = req.KeepAlive.Duration
+	}
 
 	if !manager.ModelExists(localName) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
@@ -654,35 +985,19 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 		return
 	}
 
-	runnerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	cmd, port, err := startMLXRunner(runnerCtx, localName)
+	entry, err := mlxRunnerPool.getRunner(ctx, localName, keepAlive)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start MLX runner: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to provision MLX runner: %v", err)})
 		return
+	}
+	if keepAlive == 0 {
+		defer mlxRunnerPool.evict(localName)
+	} else {
+		defer mlxRunnerPool.touch(localName)
 	}
 
-	if err := cmd.Start(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to launch MLX runner: %v", err)})
-		return
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	if err := waitForMLXRunner(runnerCtx, client, port); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("MLX runner not ready: %v", err)})
-		return
-	}
-
-	if err := loadMLXModel(runnerCtx, client, port, localName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	client := entry.client
+	port := entry.port
 
 	stream := true
 	if req.Stream != nil {
@@ -697,17 +1012,23 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 		Format:    req.Format,
 		KeepAlive: req.KeepAlive,
 		Options:   req.Options,
+		Tools:     req.Tools,
 	}
 
 	if stream {
-		err := streamMLXChat(runnerCtx, c, client, port, req, genReq)
+		toolCalls, err := streamMLXChat(ctx, c, client, port, req, genReq)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		// Note: For streaming, tool calls are already included in the final chunk
+		// We log them here for debugging but the client already received them
+		if len(toolCalls) > 0 && len(req.Tools) > 0 {
+			slog.Debug("streaming detected tool calls", "count", len(toolCalls))
 		}
 		return
 	}
 
-	resp, err := collectMLXCompletion(runnerCtx, client, port, genReq)
+	resp, err := collectMLXCompletion(ctx, client, port, genReq)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, context.Canceled) {
@@ -717,13 +1038,42 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 		return
 	}
 
-	message := api.Message{Role: "assistant", Content: resp.Response}
+	// If the model requested tool calls and we have tool definitions, execute
+	// them and re-run the model with the tool outputs appended to the prompt.
 	if len(req.Tools) > 0 {
-		if toolCalls, ok := parseToolCallsFromText(resp.Response); ok {
-			message.ToolCalls = toolCalls
-			message.Content = ""
+		if toolCalls, ok := parseToolCallsFromText(resp.Response); ok && len(toolCalls) > 0 {
+			toolResults, err := executeToolCalls(ctx, req.Tools, toolCalls)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("tool execution failed: %v", err)})
+				return
+			}
+			// Re-run model with tool outputs appended to prompt
+			follow := *genReq
+			follow.Prompt = genReq.Prompt + "\n\nTool results:\n" + toolResults
+			finalResp, err := collectMLXCompletion(ctx, client, port, &follow)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if errors.Is(err, context.Canceled) {
+					status = http.StatusRequestTimeout
+				}
+				c.JSON(status, gin.H{"error": err.Error()})
+				return
+			}
+			message := api.Message{Role: "assistant", Content: finalResp.Response}
+			chatResp := api.ChatResponse{
+				Model:      req.Model,
+				CreatedAt:  finalResp.CreatedAt,
+				Message:    message,
+				Done:       finalResp.Done,
+				DoneReason: finalResp.DoneReason,
+				Metrics:    finalResp.Metrics,
+			}
+			c.JSON(http.StatusOK, chatResp)
+			return
 		}
 	}
+
+	message := api.Message{Role: "assistant", Content: resp.Response}
 
 	chatResp := api.ChatResponse{
 		Model:      req.Model,
@@ -763,3 +1113,60 @@ func parseParameterCount(paramSize string) int64 {
 	// Default to 0 if we can't parse it
 	return 0
 }
+
+// mlxEmbeddingResponse is the response from the MLX backend embedding endpoint
+type mlxEmbeddingResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+	Model      string      `json:"model"`
+}
+
+// EmbedMLXModel generates embeddings using an MLX model
+func (s *Server) EmbedMLXModel(c *gin.Context, modelName string, input []string) ([][]float32, error) {
+	ctx := c.Request.Context()
+	manager := llm.NewMLXModelManager()
+	localName := strings.ReplaceAll(modelName, "/", "_")
+	keepAlive := 5 * time.Minute
+
+	if !manager.ModelExists(localName) {
+		return nil, fmt.Errorf("model '%s' not found", modelName)
+	}
+
+	entry, err := mlxRunnerPool.getRunner(ctx, localName, keepAlive)
+	if err != nil {
+		return nil, fmt.Errorf("failed to provision MLX runner: %v", err)
+	}
+	defer mlxRunnerPool.touch(localName)
+
+	client := entry.client
+	port := entry.port
+
+	// Generate embeddings for each input
+	var allEmbeddings [][]float32
+	for _, text := range input {
+		reqBody, _ := json.Marshal(map[string]string{"prompt": text})
+		resp, err := client.Post(
+			fmt.Sprintf("http://127.0.0.1:%d/embedding", port),
+			"application/json",
+			bytes.NewReader(reqBody),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("embedding request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("embedding failed: %s", strings.TrimSpace(string(body)))
+		}
+
+		var embResp mlxEmbeddingResponse
+		if err := json.NewDecoder(resp.Body).Decode(&embResp); err != nil {
+			return nil, fmt.Errorf("failed to decode embedding response: %v", err)
+		}
+
+		allEmbeddings = append(allEmbeddings, embResp.Embeddings...)
+	}
+
+	return allEmbeddings, nil
+}
+

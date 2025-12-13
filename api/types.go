@@ -132,6 +132,9 @@ type GenerateRequest struct {
 	// each with an associated log probability. Only applies when Logprobs is true.
 	// Valid values are 0-20. Default is 0 (only return the selected token's logprob).
 	TopLogprobs int `json:"top_logprobs,omitempty"`
+
+	// Tools is an optional list of tools the model has access to. Primarily used for chat-style tool-calling.
+	Tools Tools `json:"tools,omitempty"`
 }
 
 // ChatRequest describes a request sent by [Client.Chat].

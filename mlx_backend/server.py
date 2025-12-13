@@ -91,6 +91,7 @@ class CompletionRequest:
     truncate: bool = False
     logprobs: bool = False
     top_logprobs: int = 0
+    tools: Optional[list] = None
 
 
 @dataclass
@@ -104,10 +105,45 @@ class CompletionResponse:
     eval_count: int = 0
     eval_duration: int = 0  # nanoseconds
     logprobs: Optional[list] = None
+    tool_calls: Optional[list] = None
 
     def to_json(self) -> str:
         """Convert to JSON string matching Ollama format"""
         return json.dumps(asdict(self))
+
+
+def parse_tool_calls(text: str) -> Optional[list]:
+    """Best-effort extraction of tool_calls JSON payload from model output."""
+    try:
+        data = json.loads(text.strip())
+    except Exception:
+        return None
+
+    calls = data.get("tool_calls")
+    if not isinstance(calls, list):
+        return None
+
+    normalized = []
+    for idx, call in enumerate(calls):
+        if not isinstance(call, dict):
+            continue
+        func = call.get("function") or {}
+        name = func.get("name")
+        arguments = func.get("arguments", {})
+        if not name:
+            continue
+        normalized.append(
+            {
+                "id": call.get("id") or f"call_{idx}",
+                "function": {
+                    "index": func.get("index", idx),
+                    "name": name,
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                },
+            }
+        )
+
+    return normalized or None
 
 
 class MLXModelManager:
@@ -135,27 +171,6 @@ class MLXModelManager:
             os.environ["HF_HOME"] = str(self.model_path)
 
         logger.info("Using MLX model path: %s", self.model_path)
-        self.finetune_fn = None
-
-    def _resolve_finetune(self):
-        """Locate finetune entrypoint if available in mlx_lm."""
-        if self.finetune_fn is not None:
-            return self.finetune_fn
-
-        # Try attribute on mlx_lm
-        fn = getattr(mlx_lm, "finetune", None)
-        if fn is None:
-            # Try submodule import lazily
-            try:
-                import importlib
-
-                mod = importlib.import_module("mlx_lm.finetune")
-                fn = getattr(mod, "finetune", None)
-            except Exception:
-                fn = None
-
-        self.finetune_fn = fn
-        return fn
 
     async def load_model(self, model_name: str) -> None:
         """
@@ -402,6 +417,68 @@ class MLXModelManager:
                 done_reason="error",
             )
 
+    def embed(self, text: str) -> list[float]:
+        """
+        Generate embeddings for the given text using the model's hidden states.
+        
+        Args:
+            text: Input text to embed
+            
+        Returns:
+            List of floats representing the embedding vector
+            
+        Raises:
+            RuntimeError: If no model is loaded or embedding generation fails
+        """
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("No model loaded")
+        
+        if not text or not isinstance(text, str):
+            raise ValueError("Text must be a non-empty string")
+        
+        try:
+            # Tokenize the input
+            tokens = self.tokenizer.encode(text)
+            if isinstance(tokens, list):
+                tokens = mx.array([tokens])
+            elif len(tokens.shape) == 1:
+                tokens = tokens.reshape(1, -1)
+            
+            # Get hidden states from the model
+            # Most MLX models expose the embedding layer
+            if hasattr(self.model, 'model') and hasattr(self.model.model, 'embed_tokens'):
+                # Get token embeddings
+                embeddings = self.model.model.embed_tokens(tokens)
+            elif hasattr(self.model, 'embed_tokens'):
+                embeddings = self.model.embed_tokens(tokens)
+            else:
+                # Fallback: run forward pass and extract last hidden state
+                # This works for most transformer models
+                outputs = self.model(tokens)
+                if hasattr(outputs, 'last_hidden_state'):
+                    embeddings = outputs.last_hidden_state
+                elif isinstance(outputs, tuple):
+                    embeddings = outputs[0]
+                else:
+                    embeddings = outputs
+            
+            # Mean pooling over sequence dimension
+            # embeddings shape: [batch, seq_len, hidden_dim]
+            embedding = mx.mean(embeddings, axis=1)
+            
+            # Normalize the embedding
+            norm = mx.sqrt(mx.sum(embedding * embedding, axis=-1, keepdims=True))
+            embedding = embedding / mx.maximum(norm, mx.array(1e-12))
+            
+            # Convert to list of floats
+            result = embedding[0].tolist()
+            
+            logger.debug(f"Generated embedding with dimension {len(result)}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Embedding generation failed: {e}")
+            raise RuntimeError(f"Failed to generate embedding: {e}")
 
 # Global model manager
 model_manager = MLXModelManager()
@@ -418,6 +495,8 @@ async def completion_endpoint(request: dict) -> StreamingResponse:
     try:
         # Parse request
         req = CompletionRequest(**request)
+        tools = request.get("tools") or []
+        tools_present = bool(tools)
 
         if not req.prompt:
             raise HTTPException(status_code=400, detail="Empty prompt")
@@ -427,6 +506,23 @@ async def completion_endpoint(request: dict) -> StreamingResponse:
 
         # Generate responses
         async def response_generator():
+            if not tools_present:
+                async for response in model_manager.generate(
+                    prompt=req.prompt,
+                    temperature=options.temperature,
+                    top_k=options.top_k,
+                    top_p=options.top_p,
+                    num_predict=options.num_predict,
+                    repeat_penalty=options.repeat_penalty,
+                ):
+                    # Emit in SSE format with line ending
+                    yield response.to_json() + "\n"
+                return
+
+            # For tool-calling, accumulate the full response and try to extract tool_calls.
+            collected = []
+            last_chunk: Optional[CompletionResponse] = None
+
             async for response in model_manager.generate(
                 prompt=req.prompt,
                 temperature=options.temperature,
@@ -435,8 +531,19 @@ async def completion_endpoint(request: dict) -> StreamingResponse:
                 num_predict=options.num_predict,
                 repeat_penalty=options.repeat_penalty,
             ):
-                # Emit in SSE format with line ending
-                yield response.to_json() + "\n"
+                collected.append(response.content)
+                last_chunk = response
+
+            combined = "".join(collected).strip()
+            tool_calls = parse_tool_calls(combined)
+
+            # Build a final chunk that carries tool_calls if we found any.
+            final = last_chunk or CompletionResponse()
+            final.content = combined if not tool_calls else combined
+            final.done = True
+            final.done_reason = "tool_calls" if tool_calls else "stop"
+            final.tool_calls = tool_calls
+            yield final.to_json() + "\n"
 
         return StreamingResponse(
             response_generator(),
@@ -495,52 +602,34 @@ async def info_endpoint():
     }
 
 
-@app.post("/finetune")
-async def finetune_endpoint(request: dict):
-    """Run a best-effort fine-tune using mlx_lm if available."""
-    model_name = request.get("model")
-    dataset = request.get("dataset")
-    output_dir = Path(request.get("output_dir", "./finetuned"))
-    epochs = int(request.get("epochs", 1))
-    batch_size = int(request.get("batch_size", 1))
-    learning_rate = float(request.get("learning_rate", 1e-4))
-
-    if not model_name or not dataset:
-        raise HTTPException(status_code=400, detail="Missing required fields: model, dataset")
-
-    fn = model_manager._resolve_finetune()
-    if fn is None:
-        raise HTTPException(status_code=501, detail="MLX fine-tuning entrypoint not available in this build (mlx_lm missing finetune)")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    def run_ft_sync():
-        # Attempt a flexible call signature; fall back if unsupported
-        try:
-            fn(
-                model=model_name,
-                data=dataset,
-                output_dir=str(output_dir),
-                epochs=epochs,
-                batch_size=batch_size,
-                learning_rate=learning_rate,
-            )
-        except TypeError:
-            fn(model_name, dataset, str(output_dir))
-
+@app.post("/embedding")
+async def embedding_endpoint(request: dict):
+    """Generate embeddings for the given text using the loaded MLX model."""
     try:
-        await asyncio.to_thread(run_ft_sync)
-    except Exception as e:  # pragma: no cover - runtime safeguard
-        raise HTTPException(status_code=500, detail=f"Fine-tune failed: {e}")
-
-    return {
-        "status": "completed",
-        "model": model_name,
-        "output_dir": str(output_dir),
-        "epochs": epochs,
-        "batch_size": batch_size,
-        "learning_rate": learning_rate,
-    }
+        # Extract text from request - support various formats
+        text = request.get("prompt") or request.get("input") or request.get("content")
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Missing 'prompt', 'input', or 'content' field")
+        
+        if model_manager.model is None:
+            raise HTTPException(status_code=400, detail="No model loaded. Call /load first.")
+        
+        # Handle both single string and list of strings
+        if isinstance(text, list):
+            embeddings = [model_manager.embed(t) for t in text]
+        else:
+            embeddings = [model_manager.embed(text)]
+        
+        return {
+            "embeddings": embeddings,
+            "model": model_manager.current_model_name,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Embedding error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def main():

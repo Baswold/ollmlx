@@ -560,6 +560,104 @@ func SignoutHandler(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// hfTokenPath returns the path to the HuggingFace token file
+func hfTokenPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ollmlx", "hf_token"), nil
+}
+
+// HFLoginHandler handles the 'ollmlx login' command for HuggingFace authentication
+func HFLoginHandler(cmd *cobra.Command, args []string) error {
+	tokenPath, err := hfTokenPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine token path: %w", err)
+	}
+
+	// Check if already logged in
+	if _, err := os.Stat(tokenPath); err == nil {
+		fmt.Println("You are already logged in to HuggingFace.")
+		fmt.Println("To log in with a different token, run 'ollmlx logout' first.")
+		return nil
+	}
+
+	fmt.Println("🤗 HuggingFace Login")
+	fmt.Println()
+	fmt.Println("To download private or gated models, you need a HuggingFace access token.")
+	fmt.Println("Get your token at: https://huggingface.co/settings/tokens")
+	fmt.Println()
+	fmt.Print("Enter your HuggingFace token: ")
+
+	// Read token (hidden input would be ideal but adds complexity)
+	reader := bufio.NewReader(os.Stdin)
+	token, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read token: %w", err)
+	}
+	token = strings.TrimSpace(token)
+
+	if token == "" {
+		return fmt.Errorf("token cannot be empty")
+	}
+
+	// Validate token format (should start with hf_)
+	if !strings.HasPrefix(token, "hf_") {
+		fmt.Println()
+		fmt.Println("⚠️  Warning: Token doesn't start with 'hf_'. Make sure you copied the full token.")
+	}
+
+	// Create directory with secure permissions
+	tokenDir := filepath.Dir(tokenPath)
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Write token with secure permissions (owner read/write only)
+	if err := os.WriteFile(tokenPath, []byte(token), 0600); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println("✅ Login successful! Your token has been saved.")
+	fmt.Println("   You can now pull private and gated models from HuggingFace.")
+	return nil
+}
+
+// HFLogoutHandler handles the 'ollmlx logout' command
+func HFLogoutHandler(cmd *cobra.Command, args []string) error {
+	tokenPath, err := hfTokenPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine token path: %w", err)
+	}
+
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		fmt.Println("You are not logged in to HuggingFace.")
+		return nil
+	}
+
+	if err := os.Remove(tokenPath); err != nil {
+		return fmt.Errorf("failed to remove token: %w", err)
+	}
+
+	fmt.Println("✅ Logged out successfully. Your HuggingFace token has been removed.")
+	return nil
+}
+
+// GetHFToken returns the stored HuggingFace token, or empty string if not logged in
+func GetHFToken() string {
+	tokenPath, err := hfTokenPath()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func PushHandler(cmd *cobra.Command, args []string) error {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
@@ -1790,6 +1888,21 @@ func NewCLI() *cobra.Command {
 		RunE:    SignoutHandler,
 	}
 
+	loginCmd := &cobra.Command{
+		Use:   "login",
+		Short: "Log in to HuggingFace to pull private/gated MLX models",
+		Args:  cobra.ExactArgs(0),
+		RunE:  HFLoginHandler,
+	}
+
+	logoutCmd := &cobra.Command{
+		Use:   "logout",
+		Short: "Log out from HuggingFace",
+		Args:  cobra.ExactArgs(0),
+		RunE:  HFLogoutHandler,
+	}
+
+
 	listCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -1886,6 +1999,8 @@ func NewCLI() *cobra.Command {
 		pushCmd,
 		signinCmd,
 		signoutCmd,
+		loginCmd,
+		logoutCmd,
 		listCmd,
 		psCmd,
 		copyCmd,

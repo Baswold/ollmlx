@@ -7,11 +7,12 @@ This document describes the technical architecture of ollmlx's MLX integration.
 ollmlx extends Ollama's inference layer to support Apple's MLX framework while maintaining 100% API compatibility. The integration uses a hybrid architecture where the Go server layer proxies requests to either the traditional llama.cpp backend (for GGUF models) or a Python MLX backend (for MLX models).
 
 **Runtime parity highlights (current implementation):**
-- `server/routes_mlx.go` starts the MLX runner on a random local port, waits for `/health`, and calls `/load` before serving completions.
+- `server/routes_mlx.go` maintains a small keep-alive pool for MLX runners: the first request starts the runner/Python backend and subsequent requests reuse it until the keepalive TTL expires (or immediately if `keep_alive=0`).
+- MLX models are fetched from Hugging Face using the repository file list (including sharded weights) and cached under `$(OLLAMA_MODELS)/mlx`.
 - Streaming completions are proxied line-for-line into Ollama's `GenerateResponse` NDJSON format (metrics populated in the `Metrics` block; logprobs passthrough-ready).
 - Non-streaming completions aggregate the content and return the final `GenerateResponse` just like the GGUF path.
 - Pull progress now uses a stable digest (SHA-256 of model name) so CLI progress bars behave like standard `ollama pull`.
-- Experimental `/finetune` endpoint calls into `mlx_lm` fine-tune if available; returns 501 otherwise.
+- Fine-tuning endpoint exists but currently returns 501 (mlx_lm finetune hook not available yet); MLX embeddings are also unimplemented and return 501.
 - MLX backend attempts to default to Metal GPU at startup for acceleration.
 - `ollmlx run --verbose` surfaces Apple Silicon / MLX tuning tips (Metal, 4-bit MLX models, cache location).
 - See [Apple Silicon Optimization Guide](./apple_silicon_optimization.md) for practical steps to extract more performance from MLX on macOS.

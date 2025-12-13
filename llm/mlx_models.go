@@ -35,6 +35,19 @@ type MLXModelManager struct {
 	modelsDir string
 }
 
+// hfModelInfo mirrors the subset of Hugging Face model metadata we need.
+// The "siblings" list contains files at the repository root, which is sufficient
+// for typical MLX model layouts (config, tokenizer, weights shards).
+type hfModelInfo struct {
+	Siblings []struct {
+		RFilename string `json:"rfilename"`
+		Size      int64  `json:"size"`
+		LFS       struct {
+			Size int64 `json:"size"`
+		} `json:"lfs"`
+	} `json:"siblings"`
+}
+
 // NewMLXModelManager creates a new MLX model manager
 func NewMLXModelManager() *MLXModelManager {
 	// Use Ollama's model directory structure respecting environment overrides
@@ -122,9 +135,13 @@ func (m *MLXModelManager) GetModelInfo(modelName string) (MLXModelInfo, error) {
 		info.Size = size
 	}
 
-	// Generate a stable digest from the model name
-	sum := sha256.Sum256([]byte(modelName))
-	info.Digest = fmt.Sprintf("sha256:%x", sum)
+	// Generate a stable digest from file layout (fallback to name if it fails)
+	if digest, err := computeDigest(modelPath); err == nil {
+		info.Digest = digest
+	} else {
+		sum := sha256.Sum256([]byte(modelName))
+		info.Digest = fmt.Sprintf("sha256:%x", sum)
+	}
 
 	return info, nil
 }
@@ -223,14 +240,130 @@ func getMLXBaseURL(modelID string) string {
 	return fmt.Sprintf("https://huggingface.co/%s", modelID)
 }
 
+func shouldDownloadFile(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json", "special_tokens_map.json", "tokenizer.model":
+		return true
+	}
+
+	if strings.HasSuffix(lower, ".npz") {
+		return true
+	}
+
+	if strings.HasSuffix(lower, ".safetensors") || strings.HasSuffix(lower, ".safetensors.index.json") {
+		return true
+	}
+
+	// Sharded weights: model-00001-of-000xx.safetensors
+	if strings.HasPrefix(lower, "model-") && strings.Contains(lower, ".safetensors") {
+		return true
+	}
+
+	return false
+}
+
+// computeDigest derives a stable digest from filenames and sizes to avoid
+// hashing multi‑GB payloads. It is intentionally lightweight so it can run on
+// large local caches without blocking.
+func computeDigest(root string) (string, error) {
+	h := sha256.New()
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		// include name + size so digest changes when any weight differs
+		fmt.Fprintf(h, "%s:%d\n", rel, info.Size())
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
+}
+
+// getHFToken reads the stored HuggingFace token from ~/.ollmlx/hf_token
+func getHFToken() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	tokenPath := filepath.Join(home, ".ollmlx", "hf_token")
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (m *MLXModelManager) fetchHFFileList(ctx context.Context, modelID string) ([]string, map[string]int64, error) {
+	url := fmt.Sprintf("https://huggingface.co/api/models/%s", modelID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Allow HF tokens from common env vars if provided.
+	token := getHFToken()
+	if token == "" {
+		for _, key := range []string{"HUGGINGFACEHUB_API_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN"} {
+			if tok := strings.TrimSpace(os.Getenv(key)); tok != "" {
+				token = tok
+				break
+			}
+		}
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, nil, fmt.Errorf("huggingface api returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var meta hfModelInfo
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, nil, err
+	}
+
+	var files []string
+	sizes := make(map[string]int64)
+	for _, sib := range meta.Siblings {
+		name := sib.RFilename
+		if name == "" {
+			continue
+		}
+		if !shouldDownloadFile(name) {
+			continue
+		}
+		size := sib.Size
+		if sib.LFS.Size > 0 {
+			size = sib.LFS.Size
+		}
+		files = append(files, name)
+		sizes[name] = size
+	}
+
+	if len(files) == 0 {
+		return nil, nil, fmt.Errorf("no downloadable MLX files found for %s", modelID)
+	}
+
+	return files, sizes, nil
+}
+
 // DownloadMLXModel downloads an MLX model from HuggingFace
 func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, progressFn func(string, float64)) error {
-	// This is a simplified version - in production, you'd want to:
-	// 1. Use the HuggingFace hub API to list files
-	// 2. Download each file with proper progress tracking
-	// 3. Verify checksums
-	// 4. Handle resume on failure
-
 	modelPath := m.GetModelPath(modelID)
 
 	// Create model directory
@@ -245,30 +378,18 @@ func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, 
 		}
 	}()
 
-	// Required files for an MLX model
-	requiredFiles := []string{
-		"config.json",
-		"tokenizer.json",
-		"tokenizer_config.json",
+	files, sizes, err := m.fetchHFFileList(ctx, modelID)
+	if err != nil {
+		// fallback to the legacy file list so we still support minimal layouts
+		files = []string{"config.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors", "weights.npz"}
+		sizes = map[string]int64{}
 	}
 
-	// Optional but common files
-	optionalFiles := []string{
-		"model.safetensors",
-		"weights.npz",
-		"special_tokens_map.json",
-		"generation_config.json",
-	}
-
-	allFiles := append(requiredFiles, optionalFiles...)
-
-	// Base URL for HuggingFace model files, optionally overridden for tests
 	baseURL := fmt.Sprintf("%s/resolve/main", getMLXBaseURL(modelID))
-
-	totalFiles := len(allFiles)
+	totalFiles := len(files)
 	downloadedFiles := 0
 
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: 30 * time.Minute}
 
 	updateProgress := func(status string, completed int) {
 		if progressFn == nil {
@@ -278,7 +399,7 @@ func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, 
 		progressFn(status, math.Round(pct))
 	}
 
-	for _, filename := range allFiles {
+	for _, filename := range files {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -288,23 +409,13 @@ func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, 
 		updateProgress(fmt.Sprintf("downloading %s", filename), downloadedFiles)
 
 		// Download file
-		if err := m.downloadFile(ctx, client, fileURL, destPath); err != nil {
+		expectSize := sizes[filename]
+
+		if err := m.downloadFile(ctx, client, fileURL, destPath, expectSize); err != nil {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			// If it's a required file, fail
-			isRequired := false
-			for _, req := range requiredFiles {
-				if req == filename {
-					isRequired = true
-					break
-				}
-			}
-
-			if isRequired {
-				return fmt.Errorf("failed to download required file %s: %w", filename, err)
-			}
-			// Optional files can fail silently
+			return fmt.Errorf("failed to download %s: %w", filename, err)
 		}
 
 		downloadedFiles++
@@ -317,13 +428,23 @@ func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, 
 
 	cleanup = false
 
+	// Compute a lightweight digest for listing/show calls.
+	if digest, err := computeDigest(modelPath); err == nil {
+		progressFn(fmt.Sprintf("digest %s", digest), 100)
+	}
+
 	return nil
 }
 
 // downloadFile downloads a file from a URL to a local path
-func (m *MLXModelManager) downloadFile(ctx context.Context, client *http.Client, url, destPath string) error {
+func (m *MLXModelManager) downloadFile(ctx context.Context, client *http.Client, url, destPath string, expectSize int64) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return err
+	}
+
+	// Skip download if the target already exists with the expected size.
+	if stat, err := os.Stat(destPath); err == nil && expectSize > 0 && stat.Size() == expectSize {
+		return nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -331,11 +452,24 @@ func (m *MLXModelManager) downloadFile(ctx context.Context, client *http.Client,
 		return err
 	}
 
+	// Add HuggingFace token for authentication if available
+	for _, key := range []string{"HUGGINGFACEHUB_API_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN"} {
+		if tok := strings.TrimSpace(os.Getenv(key)); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+			break
+		}
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("authentication required - set HF_TOKEN environment variable with your HuggingFace token")
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, resp.Body)

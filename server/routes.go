@@ -659,6 +659,20 @@ func (s *Server) EmbedHandler(c *gin.Context) {
 		}
 	}
 
+	if IsMLXModelReference(req.Model) {
+		embeddings, err := s.EmbedMLXModel(c, req.Model, input)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp := api.EmbedResponse{
+			Model:      req.Model,
+			Embeddings: embeddings,
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
 	name, err := getExistingName(model.ParseName(req.Model))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
@@ -803,6 +817,24 @@ func (s *Server) EmbeddingsHandler(c *gin.Context) {
 		return
 	}
 
+	if IsMLXModelReference(req.Model) {
+		embeddings, err := s.EmbedMLXModel(c, req.Model, []string{req.Prompt})
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		// Convert to float64 for legacy API
+		var e []float64
+		if len(embeddings) > 0 {
+			for _, v := range embeddings[0] {
+				e = append(e, float64(v))
+			}
+		}
+		resp := api.EmbeddingResponse{Embedding: e}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
 	r, _, _, err := s.scheduleRunner(c.Request.Context(), name.String(), []model.Capability{}, req.Options, req.KeepAlive)
 	if err != nil {
 		handleScheduleError(c, req.Model, err)
@@ -831,6 +863,7 @@ func (s *Server) EmbeddingsHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
+
 
 func (s *Server) PullHandler(c *gin.Context) {
 	var req api.PullRequest
