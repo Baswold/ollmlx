@@ -208,7 +208,7 @@ export const ModelPicker = forwardRef<
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Find model..."
+              placeholder="Search models or mlx-community/..."
               autoCorrect="off"
               className="w-full px-2 py-0.5 bg-transparent border-none border-neutral-200 rounded-md outline-none focus:border-neutral-400 dark:border-neutral-600 dark:focus:border-neutral-400"
             />
@@ -337,6 +337,11 @@ export const ModelList = forwardRef(function ModelList(
                 <span className="flex-1 text-left truncate min-w-0">
                   {model.model}
                 </span>
+                {model.isMLX() && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                    MLX
+                  </span>
+                )}
                 {model.isCloud() && (
                   <svg
                     className="h-3 fill-current text-neutral-500 dark:text-neutral-400"

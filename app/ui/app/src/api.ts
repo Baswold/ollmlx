@@ -21,11 +21,22 @@ import { API_BASE } from "./lib/config";
 declare module "@/gotypes" {
   interface Model {
     isCloud(): boolean;
+    isMLX(): boolean;
   }
 }
 
 Model.prototype.isCloud = function (): boolean {
   return this.model.endsWith("cloud");
+};
+
+Model.prototype.isMLX = function (): boolean {
+  // MLX models typically come from HuggingFace with format:
+  // - "mlx-community/ModelName"
+  // - contain "-mlx" in the name
+  return (
+    this.model.startsWith("mlx-community/") ||
+    this.model.toLowerCase().includes("-mlx")
+  );
 };
 
 // Helper function to convert Uint8Array to base64

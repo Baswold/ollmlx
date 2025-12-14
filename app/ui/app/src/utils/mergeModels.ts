@@ -2,6 +2,7 @@ import { Model } from "@/gotypes";
 
 // Featured models list (in priority order)
 export const FEATURED_MODELS = [
+  // Cloud models
   "gpt-oss:120b-cloud",
   "gpt-oss:20b-cloud",
   "deepseek-v3.1:671b-cloud",
@@ -9,6 +10,7 @@ export const FEATURED_MODELS = [
   "qwen3-vl:235b-cloud",
   "minimax-m2:cloud",
   "glm-4.6:cloud",
+  // GGUF models
   "gpt-oss:120b",
   "gpt-oss:20b",
   "gemma3:27b",
@@ -23,6 +25,14 @@ export const FEATURED_MODELS = [
   "qwen3:30b",
   "qwen3:8b",
   "qwen3:4b",
+  // Popular MLX models (Hugging Face)
+  "mlx-community/Llama-3.2-3B-Instruct-4bit",
+  "mlx-community/Llama-3.2-1B-Instruct-4bit",
+  "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
+  "mlx-community/Qwen2.5-7B-Instruct-4bit",
+  "mlx-community/SmolLM2-1.7B-Instruct-4bit",
+  "mlx-community/Phi-3.5-mini-instruct-4bit",
+  "mlx-community/gemma-2-2b-it-4bit",
 ];
 
 function alphabeticalSort(a: Model, b: Model): number {
