@@ -21,6 +21,7 @@
 
 > **Note:** MLX generation infrastructure is wired up with runner reuse and Hugging Face downloads. Embeddings are implemented using mean-pooling. Tool calling supports streaming. GGUF models work completely as expected.
 
+> **⚠️ Server/CLI Only:** ollmlx is a backend server and CLI tool. There is no GUI or desktop app. Use any Ollama-compatible client (like [Open WebUI](https://github.com/open-webui/open-webui), Ollama Desktop, or your IDE) to interact with ollmlx.
 
 > **ollmlx** is a high-performance LLM inference server optimized for Apple Silicon, delivering blazing-fast inference with full Ollama API compatibility.
 
