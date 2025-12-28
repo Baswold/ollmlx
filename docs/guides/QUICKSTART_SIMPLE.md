@@ -2,51 +2,83 @@
 
 **Get started with ollmlx in 3 easy steps!**
 
-## 1️⃣ Install
+## Prerequisites
+
+- macOS 14.0+ (Sonoma or later)
+- Apple Silicon Mac (M1/M2/M3/M4)
+- Python 3.10+
+- Go 1.21+
+
+## 1. Install
 
 ```bash
-# Clone and build
-git clone https://github.com/ollama/ollama.git
-cd ollama
-go build -o ollmlx .
+# Clone and build (recommended)
+git clone https://github.com/ollama/ollama.git ollmlx
+cd ollmlx
+./scripts/install_ollmlx.sh
 
-# Install Python dependencies
+# Or build manually
+go build -o ollmlx .
 pip install -r mlx_backend/requirements.txt
 ```
 
-## 2️⃣ Run
+## 2. Run
 
 ```bash
 # Start the server
 ./ollmlx serve &
 
-# In another terminal, pull a model
-./ollmlx pull gemma2:2b
+# Pull an MLX model (fast, optimized for Apple Silicon)
+./ollmlx pull mlx-community/gemma-2-2b-it-4bit
 
 # Chat with the model!
-./ollmlx run gemma2:2b
+./ollmlx run mlx-community/gemma-2-2b-it-4bit
 ```
 
-## 3️⃣ Use the API
+## 3. Use the API
 
 ```bash
 # Generate text
 curl http://localhost:11434/api/generate -d '{
-  "model": "gemma2:2b",
-  "prompt": "Why is the sky blue?"
+  "model": "mlx-community/gemma-2-2b-it-4bit",
+  "prompt": "Why is the sky blue?",
+  "stream": false
 }'
 
 # Chat completion
 curl http://localhost:11434/api/chat -d '{
-  "model": "gemma2:2b",
-  "messages": [{"role": "user", "content": "Hello!"}]
+  "model": "mlx-community/gemma-2-2b-it-4bit",
+  "messages": [{"role": "user", "content": "Hello!"}],
+  "stream": false
 }'
 ```
 
-## 🎉 That's it!
+## That's it!
 
-**For more details:** See [QUICKSTART.md](QUICKSTART.md)
+### Quick Model Recommendations
 
-**Need help?** Check [TESTING_GUIDE.md](TESTING_GUIDE.md)
+| Model | Size | Best For |
+|-------|------|----------|
+| `mlx-community/SmolLM2-135M-Instruct-4bit` | 150MB | Quick testing |
+| `mlx-community/gemma-2-2b-it-4bit` | 1.5GB | General use |
+| `mlx-community/Llama-3.2-1B-Instruct-4bit` | 750MB | Coding, chat |
+| `mlx-community/Mistral-7B-Instruct-v0.3-4bit` | 4GB | High quality |
 
-**Found an issue?** See [test_results_mlx_generation.md](../archive/test_results_mlx_generation.md) for known limitations.
+### Run Diagnostics
+
+```bash
+./ollmlx doctor
+```
+
+### Run Tests
+
+```bash
+# Quick integration test
+./scripts/test_gemma_mlx.sh
+```
+
+**For more details:** See [QUICKSTART_DETAILED.md](QUICKSTART_DETAILED.md)
+
+**Test Guide:** See [TEST_ON_MAC.md](../../TEST_ON_MAC.md)
+
+**Architecture:** See [MLX_ARCHITECTURE.md](../MLX_ARCHITECTURE.md)
