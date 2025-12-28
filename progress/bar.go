@@ -172,6 +172,20 @@ func (b *Bar) Set(value int64) {
 	}
 }
 
+// MaxValue returns the current maximum value of the progress bar
+func (b *Bar) MaxValue() int64 {
+	return b.maxValue
+}
+
+// SetMax updates the maximum value (useful when total size is discovered incrementally)
+func (b *Bar) SetMax(value int64) {
+	b.maxValue = value
+	// Reset stopped state if we're no longer complete
+	if b.currentValue < b.maxValue {
+		b.stopped = time.Time{}
+	}
+}
+
 func (b *Bar) percent() float64 {
 	if b.maxValue > 0 {
 		return float64(b.currentValue) / float64(b.maxValue) * 100

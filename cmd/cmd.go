@@ -1178,11 +1178,119 @@ func PullHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Check for verbose flag (shows detailed per-layer progress)
+	verbose, _ := cmd.Flags().GetBool("verbose")
+
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
 		return err
 	}
 
+	modelName := args[0]
+
+	// Clean mode: single progress bar
+	if !verbose {
+		return pullClean(cmd.Context(), client, modelName, insecure)
+	}
+
+	// Verbose mode: original detailed output
+	return pullVerbose(cmd.Context(), client, modelName, insecure)
+}
+
+// pullClean shows a single clean progress bar for the entire download
+func pullClean(ctx context.Context, client *api.Client, modelName string, insecure bool) error {
+	p := progress.NewProgress(os.Stderr)
+	defer p.Stop()
+
+	// Track total progress across all layers
+	var totalSize int64
+	var totalCompleted int64
+	layerSizes := make(map[string]int64)
+	layerCompleted := make(map[string]int64)
+
+	var mainBar *progress.Bar
+	var currentStatus string
+	var statusSpinner *progress.Spinner
+
+	fn := func(resp api.ProgressResponse) error {
+		if resp.Digest != "" {
+			// Track layer sizes for total calculation
+			if _, seen := layerSizes[resp.Digest]; !seen {
+				layerSizes[resp.Digest] = resp.Total
+				totalSize += resp.Total
+			}
+
+			// Update completed for this layer
+			prevCompleted := layerCompleted[resp.Digest]
+			layerCompleted[resp.Digest] = resp.Completed
+			totalCompleted += (resp.Completed - prevCompleted)
+
+			// Stop status spinner when downloading starts
+			if statusSpinner != nil {
+				statusSpinner.Stop()
+				statusSpinner = nil
+			}
+
+			// Create or update main progress bar
+			if mainBar == nil && totalSize > 0 {
+				// Extract clean model name for display
+				displayName := modelName
+				if idx := strings.LastIndex(displayName, "/"); idx >= 0 {
+					displayName = displayName[idx+1:]
+				}
+				if len(displayName) > 30 {
+					displayName = displayName[:27] + "..."
+				}
+				mainBar = progress.NewBar(fmt.Sprintf("Pulling %s", displayName), totalSize, 0)
+				p.Add("main", mainBar)
+			}
+
+			if mainBar != nil {
+				// Update bar's max value if we discovered new layers
+				if totalSize > mainBar.MaxValue() {
+					mainBar.SetMax(totalSize)
+				}
+				mainBar.Set(totalCompleted)
+			}
+		} else if resp.Status != "" && resp.Status != currentStatus {
+			currentStatus = resp.Status
+
+			// Only show spinner for non-download status messages
+			if statusSpinner != nil {
+				statusSpinner.Stop()
+			}
+
+			// Clean up status message
+			status := resp.Status
+			if strings.HasPrefix(status, "pulling") {
+				status = "Preparing download..."
+			} else if strings.Contains(status, "verifying") {
+				status = "Verifying..."
+			} else if strings.Contains(status, "writing") {
+				status = "Saving..."
+			}
+
+			statusSpinner = progress.NewSpinner(status)
+			p.Add(resp.Status, statusSpinner)
+		}
+
+		return nil
+	}
+
+	request := api.PullRequest{Name: modelName, Insecure: insecure}
+	err := client.Pull(ctx, &request, fn)
+
+	if err == nil {
+		// Clear progress and show success
+		p.StopAndClear()
+		fmt.Fprintf(os.Stderr, "✓ Successfully pulled %s\n", modelName)
+	}
+
+	return err
+}
+
+// pullVerbose shows detailed per-layer progress (original behavior)
+func pullVerbose(ctx context.Context, client *api.Client, modelName string, insecure bool) error {
 	p := progress.NewProgress(os.Stderr)
 	defer p.Stop()
 
@@ -1194,22 +1302,6 @@ func PullHandler(cmd *cobra.Command, args []string) error {
 	fn := func(resp api.ProgressResponse) error {
 		if resp.Digest != "" {
 			if resp.Completed == 0 {
-				// This is the initial status update for the
-				// layer, which the server sends before
-				// beginning the download, for clients to
-				// compute total size and prepare for
-				// downloads, if needed.
-				//
-				// Skipping this here to avoid showing a 0%
-				// progress bar, which *should* clue the user
-				// into the fact that many things are being
-				// downloaded and that the current active
-				// download is not that last. However, in rare
-				// cases it seems to be triggering to some, and
-				// it isn't worth explaining, so just ignore
-				// and regress to the old UI that keeps giving
-				// you the "But wait, there is more!" after
-				// each "100% done" bar, which is "better."
 				return nil
 			}
 
@@ -1243,8 +1335,8 @@ func PullHandler(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	request := api.PullRequest{Name: args[0], Insecure: insecure}
-	return client.Pull(cmd.Context(), &request, fn)
+	request := api.PullRequest{Name: modelName, Insecure: insecure}
+	return client.Pull(ctx, &request, fn)
 }
 
 type generateContextKey string
@@ -1861,6 +1953,7 @@ func NewCLI() *cobra.Command {
 	}
 
 	pullCmd.Flags().Bool("insecure", false, "Use an insecure registry")
+	pullCmd.Flags().BoolP("verbose", "v", false, "Show detailed per-layer progress")
 
 	pushCmd := &cobra.Command{
 		Use:     "push MODEL",

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ollmlx Easy Installer for macOS
 # Usage: curl -fsSL https://raw.githubusercontent.com/Baswold/ollmlx/main/scripts/easy_install.sh | bash
+#    or: curl -fsSL https://ollmlx.dev/install.sh | bash
 #
 # This script:
 # 1. Detects your platform (macOS Apple Silicon only)
