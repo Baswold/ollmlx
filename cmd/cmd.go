@@ -1866,6 +1866,28 @@ func NewCLI() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "ollmlx",
 		Short:         "Apple Silicon optimized LLM inference with MLX",
+		Long: `ollmlx - Run LLMs locally on Apple Silicon with MLX
+
+  Fast, efficient local AI inference optimized for M1/M2/M3/M4 chips.
+  100% compatible with Ollama API - use your existing tools and integrations.
+
+Quick Start:
+  ollmlx serve                                    Start the server
+  ollmlx pull mlx-community/gemma-3-270m-4bit     Download a model
+  ollmlx run mlx-community/gemma-3-270m-4bit      Chat with the model
+
+Examples:
+  ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
+  ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit "Explain quantum computing"
+  ollmlx list
+  ollmlx doctor
+
+API Endpoint:
+  The server runs on http://localhost:11434 (same as Ollama)
+  Compatible with Open WebUI, Continue, LangChain, and more.
+
+Documentation:
+  https://github.com/Baswold/ollmlx`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		CompletionOptions: cobra.CompletionOptions{
@@ -1910,8 +1932,18 @@ func NewCLI() *cobra.Command {
 	showCmd.Flags().BoolP("verbose", "v", false, "Show detailed model information")
 
 	runCmd := &cobra.Command{
-		Use:     "run MODEL [PROMPT]",
-		Short:   "Run an MLX model interactively",
+		Use:   "run MODEL [PROMPT]",
+		Short: "Run an MLX model interactively",
+		Long: `Start an interactive chat session with a model, or get a one-shot response.
+
+Examples:
+  ollmlx run mlx-community/gemma-3-270m-4bit
+  ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit "What is the capital of France?"
+  ollmlx run mlx-community/Mistral-7B-Instruct-4bit --format json
+
+Interactive Mode:
+  Type your messages and press Enter. Use /bye to exit.
+  Multi-line input: Use """ to start and end multi-line text.`,
 		Args:    cobra.MinimumNArgs(1),
 		PreRunE: checkServerHeartbeat,
 		RunE:    RunHandler,
@@ -1940,13 +1972,37 @@ func NewCLI() *cobra.Command {
 		Use:     "serve",
 		Aliases: []string{"start"},
 		Short:   "Start ollmlx server with MLX backend",
-		Args:    cobra.ExactArgs(0),
-		RunE:    RunServer,
+		Long: `Start the ollmlx server to handle API requests.
+
+The server listens on http://localhost:11434 by default (same as Ollama).
+All Ollama-compatible clients and tools will work automatically.
+
+Examples:
+  ollmlx serve
+  OLLAMA_HOST=0.0.0.0:11434 ollmlx serve    # Listen on all interfaces
+
+The server must be running before you can pull or run models.`,
+		Args: cobra.ExactArgs(0),
+		RunE: RunServer,
 	}
 
 	pullCmd := &cobra.Command{
-		Use:     "pull MODEL",
-		Short:   "Pull an MLX model from HuggingFace",
+		Use:   "pull MODEL",
+		Short: "Pull an MLX model from HuggingFace",
+		Long: `Download an MLX model from HuggingFace to use locally.
+
+Examples:
+  ollmlx pull mlx-community/gemma-3-270m-4bit
+  ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
+  ollmlx pull mlx-community/Mistral-7B-Instruct-v0.3-4bit
+
+Popular Models:
+  gemma-3-270m-4bit      Small & fast (270M params)
+  Llama-3.2-1B-Instruct  Good balance (1B params)
+  Llama-3.2-3B-Instruct  More capable (3B params)
+  Mistral-7B-Instruct    High quality (7B params)
+
+Browse all models: https://huggingface.co/mlx-community`,
 		Args:    cobra.ExactArgs(1),
 		PreRunE: checkServerHeartbeat,
 		RunE:    PullHandler,
