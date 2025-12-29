@@ -203,35 +203,33 @@ download_release() {
     fi
 }
 
-# Build from source
+# Build from source (builds in temp dir, cleans up after)
 build_from_source() {
     log "Building from source..."
 
-    local src_dir="$OLLMLX_DIR/src"
+    # Use temp directory - no permanent source folder
+    local tmp_src="/tmp/ollmlx-build-$$"
+    trap "rm -rf '$tmp_src'" EXIT
 
-    # Clone or update repository
-    if [[ -d "$src_dir/.git" ]]; then
-        log "Updating source repository..."
-        cd "$src_dir"
-        git pull -q
-    else
-        log "Cloning repository..."
-        rm -rf "$src_dir"
-        git clone -q "$REPO_URL" "$src_dir"
-        cd "$src_dir"
-    fi
+    log "Cloning repository..."
+    git clone -q --depth 1 "$REPO_URL" "$tmp_src"
+    cd "$tmp_src"
 
-    # Build binaries (ollmlx-bin because wrapper will be 'ollmlx')
+    # Build binaries
     log "Compiling ollmlx..."
     go build -ldflags="-s -w" -o "$BIN_DIR/ollmlx-bin" .
 
     log "Compiling ollama-runner..."
     go build -ldflags="-s -w" -o "$BIN_DIR/ollama-runner" ./cmd/runner
 
-    # Copy MLX backend
+    # Copy only the MLX backend (the only part we need to keep)
     cp -r mlx_backend "$OLLMLX_DIR/"
 
-    success "Built from source successfully"
+    # Cleanup happens automatically via trap
+    cd "$HOME"
+    rm -rf "$tmp_src"
+
+    success "Built from source (source cleaned up)"
 }
 
 # Setup shell integration

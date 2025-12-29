@@ -48,40 +48,19 @@ ollmlx is a **drop-in replacement** for Ollama that swaps the GGUF/llama.cpp bac
 
 ## 🚀 Quick Start
 
-> 📖 **New here?** Start with [QUICKSTART_SIMPLE.md](docs/guides/QUICKSTART_SIMPLE.md) for the easiest setup!
-
-### Installation Options
-
-#### Option 1: One-Line Install (Recommended)
+### One-Line Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Baswold/ollmlx/main/scripts/easy_install.sh | bash
 ```
 
-This automatically:
-- Detects your platform (macOS Apple Silicon)
+This installs everything cleanly to `~/.ollmlx/` (hidden folder, no clutter):
+- Builds ollmlx from source (or downloads pre-built binaries)
 - Sets up Python environment with MLX
-- Downloads or builds ollmlx
-- Adds to your PATH
+- Adds `ollmlx` command to your PATH
+- Cleans up after itself - no source folders left behind
 
-#### Option 2: Homebrew
-
-```bash
-brew tap Baswold/ollmlx
-brew install ollmlx
-```
-
-#### Option 3: Download DMG
-
-Download the latest `.dmg` from [Releases](https://github.com/Baswold/ollmlx/releases) and drag to Applications.
-
-#### Option 4: Build from Source
-
-```bash
-git clone https://github.com/Baswold/ollmlx.git
-cd ollmlx
-./scripts/install_ollmlx.sh
-```
+**Requirements:** macOS with Apple Silicon (M1/M2/M3/M4), Python 3.10+, and Go 1.21+ (for building)
 
 ### Verify Installation
 
@@ -90,7 +69,7 @@ ollmlx doctor   # Check everything is set up
 ollmlx serve    # Start the server
 ```
 
-### 2. Login (Optional)
+### Login (Optional)
 
 To download private or gated models (like Llama 3), log in with your HuggingFace token:
 
@@ -99,7 +78,7 @@ To download private or gated models (like Llama 3), log in with your HuggingFace
 # Paste your token starting with hf_...
 ```
 
-### 3. Pull a Model
+### Pull a Model
 
 ```bash
 # Pull a small, fast model
@@ -109,20 +88,18 @@ To download private or gated models (like Llama 3), log in with your HuggingFace
 ./ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
 ```
 
-### 4. Chat with the Model
+### Chat with the Model
 
 ```bash
 # Interactive chat
 ./ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit
 
-# Or use the API
+# Or use the API (make sure server is running first)
 curl http://localhost:11434/api/generate -d '{
   "model": "mlx-community/Llama-3.2-1B-Instruct-4bit",
   "prompt": "Explain quantum computing in simple terms.",
   "stream": false
 }'
-```
-
 ```
 
 ## 📊 Performance Comparison
@@ -311,44 +288,60 @@ Switching from Ollama to ollmlx is easy:
 
 ## 📦 Model Management
 
+### Model Storage (LM Studio-Style)
+
+ollmlx uses simple folder-based storage - no complex manifest or blob system. Models are stored in `~/.ollmlx/models/` as plain directories:
+
+```
+~/.ollmlx/models/
+├── mlx-community_Llama-3.2-1B-Instruct-4bit/
+│   ├── config.json
+│   ├── model.safetensors
+│   ├── tokenizer.json
+│   └── tokenizer_config.json
+└── mlx-community_Qwen2.5-0.5B-Instruct-4bit/
+    └── ...
+```
+
+### Importing Models (Just Drop In!)
+
+To import a model you downloaded elsewhere:
+
+```bash
+# 1. Download or copy your MLX model folder
+# 2. Put it in the models directory:
+cp -r ~/Downloads/my-model ~/.ollmlx/models/my-model
+
+# 3. That's it! Use it immediately:
+ollmlx run my-model
+```
+
+Any folder with `config.json` and `.safetensors` weights will work.
+
 ### Pulling Models
 
 ```bash
-# Pull a model
+# Pull a model from HuggingFace
 ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
-
-# Pull with progress tracking
-ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit --progress
 ```
 
 ### Listing Models
 
 ```bash
-# List all models
 ollmlx list
-
-# List with details
-ollmlx list --verbose
 ```
 
 ### Showing Model Info
 
 ```bash
-# Get detailed model information
 ollmlx show mlx-community/Llama-3.2-1B-Instruct-4bit
-
-# Show size and format
-ollmlx show --format json mlx-community/Llama-3.2-1B-Instruct-4bit
+ollmlx show -v mlx-community/Llama-3.2-1B-Instruct-4bit  # verbose
 ```
 
-### Deleting Models
+### Removing Models
 
 ```bash
-# Remove a model
-ollmlx delete mlx-community/Llama-3.2-1B-Instruct-4bit
-
-# Force delete (skip confirmation)
-ollmlx delete --force mlx-community/Llama-3.2-1B-Instruct-4bit
+ollmlx rm mlx-community/Llama-3.2-1B-Instruct-4bit
 ```
 
 ## 🛡️ Security
@@ -413,7 +406,7 @@ top -o cpu -R
 
 ### Getting Help
 
-- **GitHub Issues**: [https://github.com/ollama/ollama/issues](https://github.com/ollama/ollama/issues)
+- **GitHub Issues**: [https://github.com/Baswold/ollmlx/issues](https://github.com/Baswold/ollmlx/issues)
 - **Discord**: Join our community
 - **Email**: Support email if available
 
@@ -438,15 +431,14 @@ We welcome contributions! Here's how you can help:
 
 ```bash
 # Clone the repository
-git clone https://github.com/ollama/ollama.git
-cd ollama
+git clone https://github.com/Baswold/ollmlx.git
+cd ollmlx
 
-# Install dependencies
-go mod download
-pip install -r mlx_backend/requirements.txt
+# Run the install script (sets up Python venv + builds)
+./scripts/install_ollmlx.sh
 
-# Build and test
-make test
+# Run tests
+go test ./...
 ```
 
 ## 📄 License
