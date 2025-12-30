@@ -72,3 +72,5 @@ dist/
 # Compiled runners
 runner/ollamarunner/ollamarunner
 runner/mlxrunner/mlxrunner
+ollama-runner
+test_*.py
