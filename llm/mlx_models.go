@@ -63,6 +63,13 @@ func (m *MLXModelManager) GetModelsDir() string {
 	return m.modelsDir
 }
 
+// internalDirs are directories used for Ollama compatibility, not MLX models
+var internalDirs = map[string]bool{
+	"blobs":     true,
+	"manifests": true,
+	"mlx":       true,
+}
+
 // ListModels returns all locally cached MLX models
 func (m *MLXModelManager) ListModels() ([]MLXModelInfo, error) {
 	var models []MLXModelInfo
@@ -77,6 +84,16 @@ func (m *MLXModelManager) ListModels() ([]MLXModelInfo, error) {
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+
+		// Skip internal directories (blobs, manifests, mlx)
+		if internalDirs[entry.Name()] {
+			continue
+		}
+
+		// Validate this is actually a model (has config.json + weights)
+		if !m.ModelExists(entry.Name()) {
 			continue
 		}
 

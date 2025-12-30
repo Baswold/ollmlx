@@ -1802,7 +1802,7 @@ func checkServerHeartbeat(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		if err := startApp(cmd.Context(), client); err != nil {
-			return fmt.Errorf("ollama server not responding - %w", err)
+			return fmt.Errorf("ollmlx server not responding - %w", err)
 		}
 	}
 	return nil
