@@ -687,7 +687,6 @@ class MLXModelManager:
 
         try:
             from mlx_vlm import generate as vlm_generate
-            from mlx_vlm.utils import generate_step
 
             eval_start = time.time()
             token_count = 0
