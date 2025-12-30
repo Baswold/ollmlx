@@ -207,7 +207,7 @@ func (c *mlxRunnerCache) getRunner(ctx context.Context, model string, keepalive 
 		keepalive: keepalive,
 		ready:     make(chan struct{}),
 		lastUsed:  time.Now(),
-		client:    &http.Client{Timeout: 5 * time.Minute},
+		client:    &http.Client{Timeout: 30 * time.Minute},
 	}
 	c.entries[model] = entry
 	c.mu.Unlock()
