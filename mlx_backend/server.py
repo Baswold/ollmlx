@@ -79,6 +79,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy asyncio warnings when clients disconnect mid-stream
+logging.getLogger("asyncio").setLevel(logging.ERROR)
+
 
 @dataclass
 class ImageData:
