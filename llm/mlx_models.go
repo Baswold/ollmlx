@@ -275,7 +275,9 @@ func getMLXBaseURL(modelID string) string {
 func shouldDownloadFile(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
-	case "config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json", "special_tokens_map.json", "tokenizer.model":
+	case "config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json", "special_tokens_map.json", "tokenizer.model",
+		"preprocessor_config.json", "chat_template.json", "added_tokens.json", "vocab.json", "merges.txt":
+		// Core model files + vision model files + tokenizer files
 		return true
 	}
 
