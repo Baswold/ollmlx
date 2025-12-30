@@ -92,7 +92,7 @@ class Options:
     temperature: float = 0.7
     top_k: int = 40
     top_p: float = 0.9
-    num_predict: int = 128
+    num_predict: int = 16384  # Default to 16K tokens for reasoning models
     repeat_penalty: float = 1.1
     repeat_last_n: int = 64
     presence_penalty: float = 0.0
@@ -474,7 +474,7 @@ class MLXModelManager:
         temperature: float = 0.7,
         top_k: int = 40,
         top_p: float = 0.9,
-        num_predict: int = 128,
+        num_predict: int = 16384,
         repeat_penalty: float = 1.1,
         images: Optional[list] = None,
     ) -> AsyncIterator[CompletionResponse]:
@@ -514,8 +514,8 @@ class MLXModelManager:
         if not (0.0 <= top_p <= 1.0):
             raise ValueError("Top-P must be between 0.0 and 1.0")
 
-        if not (1 <= num_predict <= 4096):
-            raise ValueError("Number of tokens to predict must be between 1 and 4096")
+        if not (1 <= num_predict <= 131072):
+            raise ValueError("Number of tokens to predict must be between 1 and 131072")
 
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("No model loaded")
