@@ -466,6 +466,7 @@ The Ollama team's commitment to open source has been instrumental in making loca
 - **HuggingFace** - For hosting MLX models and providing the infrastructure for model distribution
 - **mlx-community** - For converting and maintaining MLX-optimized models
 - **All Contributors** - For helping improve this project
+- **Claude!** - for making it work, as I could not!
 
 ## Contact
 
