@@ -26,13 +26,13 @@ pip install -r mlx_backend/requirements.txt
 
 ```bash
 # Start the server
-./ollmlx serve &
+ollmlx serve &
 
 # Pull an MLX model (fast, optimized for Apple Silicon)
-./ollmlx pull mlx-community/gemma-2-2b-it-4bit
+ollmlx pull mlx-community/gemma-2-2b-it-4bit
 
 # Chat with the model!
-./ollmlx run mlx-community/gemma-2-2b-it-4bit
+ollmlx run mlx-community/gemma-2-2b-it-4bit
 ```
 
 ## 3. Use the API
@@ -67,7 +67,7 @@ curl http://localhost:11434/api/chat -d '{
 ### Run Diagnostics
 
 ```bash
-./ollmlx doctor
+ollmlx doctor
 ```
 
 ### Run Tests

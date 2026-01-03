@@ -26,7 +26,7 @@ cd ollmlx
 
 ```bash
 # Check everything is set up correctly
-./ollmlx doctor
+ollmlx doctor
 ```
 
 You should see all green checkmarks.
@@ -35,24 +35,24 @@ You should see all green checkmarks.
 
 ```bash
 # Start ollmlx in the background
-./ollmlx serve &
+ollmlx serve &
 ```
 
 ### 4. Pull a Test Model
 
 ```bash
 # Pull a small, fast Gemma model (about 1.5GB)
-./ollmlx pull mlx-community/gemma-2-2b-it-4bit
+ollmlx pull mlx-community/gemma-2-2b-it-4bit
 
 # Or try an even smaller model for quick testing (~150MB)
-./ollmlx pull mlx-community/SmolLM2-135M-Instruct-4bit
+ollmlx pull mlx-community/SmolLM2-135M-Instruct-4bit
 ```
 
 ### 5. Test It!
 
 ```bash
 # Interactive chat
-./ollmlx run mlx-community/gemma-2-2b-it-4bit
+ollmlx run mlx-community/gemma-2-2b-it-4bit
 
 # Or test via API
 curl http://localhost:11434/api/generate -d '{
@@ -100,7 +100,7 @@ lsof -i :11434
 pkill -f "ollmlx serve"
 
 # Try starting with verbose logging
-OLLAMA_DEBUG=1 ./ollmlx serve
+OLLAMA_DEBUG=1 ollmlx serve
 ```
 
 ### Model pull fails
@@ -110,7 +110,7 @@ OLLAMA_DEBUG=1 ./ollmlx serve
 curl -I https://huggingface.co
 
 # For gated models, login first
-./ollmlx login
+ollmlx login
 ```
 
 ### Slow performance
@@ -120,13 +120,14 @@ curl -I https://huggingface.co
 # Look for "Using device: mps" in logs
 
 # Make sure you're using MLX models (not GGUF)
-./ollmlx list
+ollmlx list
 ```
 
 ### Python errors
 
 ```bash
-# Reinstall Python dependencies
+# The install script handles Python dependencies automatically
+# But if you need to reinstall manually:
 source ~/.ollmlx/venv/bin/activate
 pip install -r mlx_backend/requirements.txt
 ```
@@ -152,6 +153,6 @@ Your test is successful if:
 
 ## Need Help?
 
-- Run `./ollmlx doctor` for diagnostics
+- Run `ollmlx doctor` for diagnostics
 - Check logs with `OLLAMA_DEBUG=1`
 - Open an issue on GitHub

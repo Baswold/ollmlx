@@ -74,7 +74,7 @@ ollmlx serve    # Start the server
 To download private or gated models (like Llama 3), log in with your HuggingFace token:
 
 ```bash
-./ollmlx login
+ollmlx login
 # Paste your token starting with hf_...
 ```
 
@@ -82,17 +82,17 @@ To download private or gated models (like Llama 3), log in with your HuggingFace
 
 ```bash
 # Pull a small, fast model
-./ollmlx pull mlx-community/SmolLM2-135M-Instruct-4bit
+ollmlx pull mlx-community/SmolLM2-135M-Instruct-4bit
 
 # Or try a larger model
-./ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
+ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
 ```
 
 ### Chat with the Model
 
 ```bash
 # Interactive chat
-./ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit
+ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit
 
 # Or use the API (make sure server is running first)
 curl http://localhost:11434/api/generate -d '{
@@ -434,7 +434,7 @@ We welcome contributions! Here's how you can help:
 git clone https://github.com/Baswold/ollmlx.git
 cd ollmlx
 
-# Run the install script (sets up Python venv + builds)
+# Run the install script (sets up Python venv + builds, adds to PATH)
 ./scripts/install_ollmlx.sh
 
 # Run tests

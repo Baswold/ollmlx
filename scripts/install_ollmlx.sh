@@ -20,6 +20,7 @@ NC='\033[0m' # No Color
 
 log() { echo -e "${BLUE}[ollmlx]${NC} $1"; }
 ok() { echo -e "${GREEN}[ok]${NC} $1"; }
+warn() { echo -e "${RED}[warn]${NC} $1"; }
 err() { echo -e "${RED}[error]${NC} $1" >&2; exit 1; }
 
 # --- 1. Prerequisites ---
@@ -79,32 +80,93 @@ go build -o ollama-runner ./cmd/runner
 ok "Build complete: ./ollama-runner"
 
 # --- 5. Installation ---
+BIN_DIR="$OLLMLX_DIR/bin"
+mkdir -p "$BIN_DIR"
+
+log "Installing binaries to $BIN_DIR..."
+cp ollmlx "$BIN_DIR/ollmlx-bin"
+cp ollama-runner "$BIN_DIR/ollama-runner"
+chmod +x "$BIN_DIR/ollmlx-bin" "$BIN_DIR/ollama-runner"
+
+# Create wrapper script
+log "Creating ollmlx command wrapper..."
+cat > "$BIN_DIR/ollmlx" << 'WRAPPER_EOF'
+#!/usr/bin/env bash
+# ollmlx wrapper - automatically sets up Python environment
+export OLLMLX_HOME="$HOME/.ollmlx"
+export OLLAMA_PYTHON="$OLLMLX_HOME/venv/bin/python3"
+export OLLMLX_BACKEND="$OLLMLX_HOME/mlx_backend"
+exec "$OLLMLX_HOME/bin/ollmlx-bin" "$@"
+WRAPPER_EOF
+chmod +x "$BIN_DIR/ollmlx"
+
+# Copy mlx_backend to .ollmlx directory
+log "Installing MLX backend..."
+cp -r "$ROOT/mlx_backend" "$OLLMLX_DIR/"
+
+ok "Binaries installed to $BIN_DIR"
+
+# --- 6. Shell Integration ---
+log "Setting up shell integration..."
+
+shell_config=""
+shell_name=""
+
+# Detect shell
+case "$SHELL" in
+  */zsh)
+    shell_config="$HOME/.zshrc"
+    shell_name="zsh"
+    ;;
+  */bash)
+    if [[ -f "$HOME/.bash_profile" ]]; then
+      shell_config="$HOME/.bash_profile"
+    else
+      shell_config="$HOME/.bashrc"
+    fi
+    shell_name="bash"
+    ;;
+  *)
+    warn "Unknown shell: $SHELL"
+    shell_config=""
+    ;;
+esac
+
+# Add to PATH if not already there
+if [[ -n "$shell_config" ]]; then
+  path_line="export PATH=\"$BIN_DIR:\$PATH\""
+
+  if ! grep -q "$BIN_DIR" "$shell_config" 2>/dev/null; then
+    echo "" >> "$shell_config"
+    echo "# ollmlx" >> "$shell_config"
+    echo "$path_line" >> "$shell_config"
+    ok "Added ollmlx to PATH in $shell_config"
+  else
+    ok "PATH already configured in $shell_config"
+  fi
+fi
+
+echo ""
+echo "--------------------------------------------------"
+echo -e "${GREEN}Installation complete!${NC}"
+echo ""
+echo -e "Binaries installed to: ${GREEN}$BIN_DIR${NC}"
+echo -e "MLX backend at:        ${GREEN}$OLLMLX_DIR/mlx_backend${NC}"
+echo -e "Python venv at:        ${GREEN}$VENV_DIR${NC}"
+echo ""
+echo -e "${BLUE}To start using ollmlx immediately:${NC}"
+echo -e "  ${GREEN}export PATH=\"$BIN_DIR:\$PATH\"${NC}"
+echo ""
+echo -e "${BLUE}Or restart your terminal, then run:${NC}"
+echo -e "  ${GREEN}ollmlx doctor${NC}   # Verify installation"
+echo -e "  ${GREEN}ollmlx serve${NC}    # Start the server"
+echo ""
 if [[ $# -gt 0 && "$1" == "--install" ]]; then
   DEST_DIR="/usr/local/bin"
-  DEST="$DEST_DIR/ollmlx"
-  RUNNER_DEST="$DEST_DIR/ollama-runner"
-  
-  log "Installing to $DEST_DIR (may require password)"
-  sudo cp ollmlx "$DEST"
-  sudo cp ollama-runner "$RUNNER_DEST"
-  
-  ok "Installed $DEST"
-  ok "Installed $RUNNER_DEST"
-  
-  echo ""
-  echo -e "${GREEN}Success! You can now run:${NC} ollmlx serve"
-else
-  echo ""
-  echo "--------------------------------------------------"
-  echo -e "Build successful!"
-  echo -e "  Main binary:   ${GREEN}$ROOT/ollmlx${NC}"
-  echo -e "  Runner binary: ${GREEN}$ROOT/ollama-runner${NC}"
-  echo ""
-  echo "To install system-wide, run:"
-  echo -e "  ${BLUE}sudo cp ollmlx ollama-runner /usr/local/bin/${NC}"
-  echo ""
-  echo "Or run this script with --install:"
-  echo -e "  ${BLUE}./scripts/install_ollmlx.sh --install${NC}"
-  echo "--------------------------------------------------"
+  log "Also installing to system-wide location $DEST_DIR (may require password)"
+  sudo cp "$BIN_DIR/ollmlx" "$DEST_DIR/ollmlx"
+  sudo cp "$BIN_DIR/ollama-runner" "$DEST_DIR/ollama-runner"
+  ok "System-wide installation complete"
 fi
+echo "--------------------------------------------------"
 

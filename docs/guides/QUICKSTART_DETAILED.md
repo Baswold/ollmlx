@@ -44,7 +44,7 @@ go build -o ollmlx .
 ### 1. Start the Server
 
 ```bash
-./ollmlx serve
+ollmlx serve
 ```
 
 You should see:
@@ -58,7 +58,7 @@ You should see:
 Start with a tiny model for testing:
 
 ```bash
-./ollmlx pull mlx-community/gemma-3-270m-4bit
+ollmlx pull mlx-community/gemma-3-270m-4bit
 ```
 
 This downloads a 234MB model optimized for MLX.
@@ -66,7 +66,7 @@ This downloads a 234MB model optimized for MLX.
 ### 3. Run Interactive Chat
 
 ```bash
-./ollmlx run mlx-community/gemma-3-270m-4bit
+ollmlx run mlx-community/gemma-3-270m-4bit
 ```
 
 Type your prompts and press Enter!
@@ -77,12 +77,12 @@ Type your prompts and press Enter!
 
 | Command | Description |
 |---------|-------------|
-| `./ollmlx serve` | Start the server |
-| `./ollmlx pull <model>` | Download a model |
-| `./ollmlx run <model>` | Interactive chat |
-| `./ollmlx list` | Show downloaded models |
-| `./ollmlx show <model>` | Model information |
-| `./ollmlx --help` | Full command list |
+| `ollmlx serve` | Start the server |
+| `ollmlx pull <model>` | Download a model |
+| `ollmlx run <model>` | Interactive chat |
+| `ollmlx list` | Show downloaded models |
+| `ollmlx show <model>` | Model information |
+| `ollmlx --help` | Full command list |
 
 ---
 
@@ -205,15 +205,15 @@ Here's what a typical session looks like:
 
 ```bash
 # Terminal 1: Start server
-$ ./ollmlx serve
+$ ollmlx serve
 ✓ MLX backend started
 ✓ Server ready
 
 # Terminal 2: Use ollmlx
-$ ./ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
+$ ollmlx pull mlx-community/Llama-3.2-1B-Instruct-4bit
 Downloading... ████████████ 100%
 
-$ ./ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit
+$ ollmlx run mlx-community/Llama-3.2-1B-Instruct-4bit
 >>> Why is the sky blue?
 
 The sky appears blue because of Rayleigh scattering...
