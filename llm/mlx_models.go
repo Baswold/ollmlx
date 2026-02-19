@@ -297,6 +297,11 @@ func shouldDownloadFile(name string) bool {
 		return true
 	}
 
+	// GGUF model files (e.g. from TheBloke or other GGUF repos on HuggingFace)
+	if strings.HasSuffix(lower, ".gguf") {
+		return true
+	}
+
 	return false
 }
 
@@ -393,7 +398,7 @@ func (m *MLXModelManager) fetchHFFileList(ctx context.Context, modelID string) (
 	}
 
 	if len(files) == 0 {
-		return nil, nil, fmt.Errorf("no downloadable MLX files found for %s", modelID)
+		return nil, nil, fmt.Errorf("no downloadable model files found for %s", modelID)
 	}
 
 	return files, sizes, nil
@@ -426,7 +431,10 @@ func (m *MLXModelManager) DownloadMLXModel(ctx context.Context, modelID string, 
 
 	files, sizes, err := m.fetchHFFileList(ctx, modelID)
 	if err != nil {
-		// fallback to the legacy file list so we still support minimal layouts
+		// Fallback to a legacy file list so we still support minimal MLX model layouts.
+		// Note: GGUF-only repos will fail here because neither safetensors nor weights.npz
+		// exist. With a correctly populated HF repo, fetchHFFileList should succeed.
+		slog.Warn("failed to fetch HuggingFace file list, falling back to defaults", "model", modelID, "error", err)
 		files = []string{"config.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors", "weights.npz"}
 		sizes = map[string]int64{}
 	}

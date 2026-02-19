@@ -26,30 +26,122 @@ import (
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/types/model"
 )
 
-// PullHuggingFaceModel downloads a model from HuggingFace (MLX or other formats)
+// hasGGUFFiles reports whether the directory at modelPath contains any .gguf files.
+func hasGGUFFiles(modelPath string) bool {
+	entries, err := os.ReadDir(modelPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
+			return true
+		}
+	}
+	return false
+}
+
+// registerGGUFHFModel registers GGUF files found in modelPath as an Ollama model
+// so they can be run through the standard llama.cpp runner. It is a no-op when
+// the directory contains no .gguf files (i.e. for MLX-format models).
+func registerGGUFHFModel(_ context.Context, modelName string, modelPath string, fn func(api.ProgressResponse)) error {
+	entries, err := os.ReadDir(modelPath)
+	if err != nil {
+		return err
+	}
+
+	var ggufFiles []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
+			ggufFiles = append(ggufFiles, filepath.Join(modelPath, e.Name()))
+		}
+	}
+
+	if len(ggufFiles) == 0 {
+		return nil // MLX model — nothing extra to register
+	}
+
+	// Parse the HuggingFace model ID as an Ollama model name.
+	// "TheBloke/Mistral-7B-v0.1-GGUF" becomes namespace=TheBloke model=Mistral-7B-v0.1-GGUF.
+	ollamaName := model.ParseName(modelName)
+	if !ollamaName.IsValid() {
+		return fmt.Errorf("cannot map HuggingFace model name %q to a valid Ollama model name", modelName)
+	}
+
+	// Use the first GGUF file found (alphabetical order via ReadDir).
+	ggufPath := ggufFiles[0]
+
+	// Compute the SHA-256 digest of the GGUF file.
+	f, err := os.Open(ggufPath)
+	if err != nil {
+		return fmt.Errorf("failed to open GGUF file %s: %w", ggufPath, err)
+	}
+	digest, _, err := GetSHA256Digest(f)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("failed to compute GGUF digest: %w", err)
+	}
+
+	// Obtain the blobs directory path for this digest.
+	blobPath, err := GetBlobsPath(digest)
+	if err != nil {
+		return fmt.Errorf("failed to resolve blobs path: %w", err)
+	}
+
+	// Symlink (or copy) the GGUF file into the Ollama blobs directory so that
+	// ggufLayers can find it via the standard digest-based lookup.
+	if err := createLink(ggufPath, blobPath); err != nil {
+		return fmt.Errorf("failed to link GGUF file into blobs: %w", err)
+	}
+
+	// Parse GGUF layers (validates the file and extracts metadata).
+	fn(api.ProgressResponse{Status: "processing GGUF model"})
+	layers, err := ggufLayers(digest, fn)
+	if err != nil {
+		return fmt.Errorf("failed to parse GGUF file: %w", err)
+	}
+
+	// Write the Ollama manifest so the model is discoverable by the regular
+	// GGUF runner path.
+	config := &ConfigV2{
+		OS:           runtime.GOOS,
+		Architecture: runtime.GOARCH,
+		RootFS: RootFS{
+			Type: "layers",
+		},
+	}
+
+	return createModel(api.CreateRequest{}, ollamaName, layers, config, fn)
+}
+
+// PullHuggingFaceModel downloads a model from HuggingFace (MLX or GGUF formats).
+// After a successful download of a GGUF model, it also registers the model with
+// Ollama's manifest system so it can be run via the standard llama.cpp runner.
 func PullHuggingFaceModel(ctx context.Context, modelName string, fn func(api.ProgressResponse)) error {
 	slog.Info("pulling model from HuggingFace", "model", modelName)
 
 	manager := llm.NewMLXModelManager()
+	localName := strings.ReplaceAll(modelName, "/", "_")
+	modelPath := manager.GetModelPath(localName)
 
-	// Check if model already exists
-	if manager.ModelExists(modelName) {
+	// Check if model already exists (MLX format or previously downloaded GGUF).
+	if manager.ModelExists(modelName) || hasGGUFFiles(modelPath) {
 		fn(api.ProgressResponse{
 			Status: fmt.Sprintf("model %s already exists", modelName),
 		})
 		return nil
 	}
 
-	// Download the model
+	// Download the model files.
 	fn(api.ProgressResponse{
 		Status: fmt.Sprintf("pulling %s from HuggingFace", modelName),
 	})
 
 	err := manager.DownloadMLXModel(ctx, modelName, func(progress llm.MLXDownloadProgress) {
-		// Generate per-file digest for proper progress tracking
-		// Each file gets its own digest so the CLI can track each file separately
+		// Generate per-file digest for proper progress tracking.
+		// Each file gets its own digest so the CLI can track each file separately.
 		var digest string
 		if progress.Filename != "" {
 			digest = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(modelName+"/"+progress.Filename)))
@@ -64,7 +156,13 @@ func PullHuggingFaceModel(ctx context.Context, modelName string, fn func(api.Pro
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to download MLX model: %w", err)
+		return fmt.Errorf("failed to download model: %w", err)
+	}
+
+	// For GGUF models: register them with Ollama so they can be run via llamarunner.
+	if err := registerGGUFHFModel(ctx, modelName, modelPath, fn); err != nil {
+		// Non-fatal: the files are downloaded; only the Ollama manifest creation failed.
+		slog.Warn("failed to register GGUF model with Ollama manifest system", "model", modelName, "error", err)
 	}
 
 	fn(api.ProgressResponse{
@@ -1427,7 +1525,7 @@ func (s *Server) generateMLXModel(c *gin.Context, req *api.GenerateRequest) {
 		downloadCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-	if err := manager.DownloadMLXModel(downloadCtx, modelName, nil); err != nil {
+		if err := manager.DownloadMLXModel(downloadCtx, modelName, nil); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to download MLX model: %v", err)})
 			return
 		}
@@ -1484,8 +1582,15 @@ func (s *Server) chatMLXModel(c *gin.Context, req *api.ChatRequest) {
 	}
 
 	if !manager.ModelExists(localName) {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
-		return
+		slog.Info("MLX model missing locally, downloading from Hugging Face", "model", req.Model)
+
+		downloadCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		if err := manager.DownloadMLXModel(downloadCtx, req.Model, nil); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to download MLX model: %v", err)})
+			return
+		}
 	}
 
 	if _, err := manager.GetModelInfo(localName); err != nil {
@@ -1705,16 +1810,18 @@ func (s *Server) EmbedMLXModel(c *gin.Context, modelName string, input []string)
 		if err != nil {
 			return nil, fmt.Errorf("embedding request failed: %v", err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			return nil, fmt.Errorf("embedding failed: %s", strings.TrimSpace(string(body)))
 		}
 
 		var embResp mlxEmbeddingResponse
-		if err := json.NewDecoder(resp.Body).Decode(&embResp); err != nil {
-			return nil, fmt.Errorf("failed to decode embedding response: %v", err)
+		decodeErr := json.NewDecoder(resp.Body).Decode(&embResp)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("failed to decode embedding response: %v", decodeErr)
 		}
 
 		allEmbeddings = append(allEmbeddings, embResp.Embeddings...)
